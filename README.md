@@ -9,7 +9,7 @@ The manager can:
 - start the server through the native, headless Briefcase launcher;
 - create the administration identity and a strong password;
 - connect securely to the local Briefcase administration service;
-- configure mods, server settings, map rotation and balance settings;
+- configure mods, server settings, map rotation and balancing settings;
 - view server logs and restart the server when changes must be applied.
 
 > [!IMPORTANT]
@@ -143,7 +143,7 @@ View the server status, enable or disable installed mods, read recent logs and r
 
 Edit server gameplay, network and map settings. Map rotation uses named map entries that you can enable and reorder instead of requiring internal map codes in a text field. Select the save button after making changes.
 
-### Balance
+### Balancing
 
 Choose a character or balance group, edit the exposed character, weapon and gameplay values, then save them. Restart the server when the page tells you that the new values are applied at startup.
 
@@ -194,7 +194,7 @@ Check each of the following:
 - the fingerprint and password were loaded from the same server installation;
 - another application is not already using port `32189`.
 
-### Mods, Configuration or Balance says that no server is connected
+### Mods, Configuration or Balancing says that no server is connected
 
 Open Administration and select **Connect**. These pages require an active administration connection and are cleared when the server stops or restarts.
 

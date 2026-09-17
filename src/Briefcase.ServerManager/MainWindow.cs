@@ -29,6 +29,7 @@ public sealed partial class MainWindow : Window
     private BriefcaseInstallation? installation;
     private readonly BriefcaseReleaseInstaller installer = new();
     private readonly AdminConnection administration = new();
+    private readonly ServerQueryClient serverQuery = new();
     private readonly TextBlock notice;
     private readonly Border noticeBorder;
     private readonly FluentIcon noticeIcon;
@@ -42,6 +43,17 @@ public sealed partial class MainWindow : Window
     private readonly Dictionary<Button, PageDefinition> pageDefinitions = [];
     private readonly TextBlock pageTitle;
     private readonly TextBlock pageSubtitle;
+    private readonly TextBlock serverSummaryName;
+    private readonly Border serverSummaryDot;
+    private readonly TextBlock serverSummaryReachability;
+    private readonly TextBlock serverSummaryPlayers;
+    private readonly TextBlock serverSummaryState;
+    private readonly TextBlock serverSummaryMap;
+    private readonly TextBlock serverSummaryPing;
+    private readonly TextBlock serverSummaryActionState;
+    private readonly Button serverSummaryStart;
+    private readonly Button serverSummaryRestart;
+    private readonly Button serverSummaryShutdown;
     private readonly TextBlock adminState;
     private readonly Border connectionDot;
     private readonly TextBox listen = new() { Text = "127.0.0.1", MinHeight = 36 };
@@ -59,6 +71,7 @@ public sealed partial class MainWindow : Window
     private readonly ComboBox logSource = new() { ItemsSource = new[] { "framework", "game" }, SelectedIndex = 0, MinWidth = 180 };
     private readonly ComboBox balanceGroup = new() { MinWidth = 220 };
     private readonly DispatcherTimer processTimer;
+    private readonly DispatcherTimer serverSummaryTimer;
     private Button? selectedNavigation;
     private Button? refreshAdministrationButton;
     private Button? disconnectAdministrationButton;
@@ -66,6 +79,14 @@ public sealed partial class MainWindow : Window
     private JsonObject? selection;
     private JsonObject? balance;
     private bool busy;
+    private bool serverSummaryBusy;
+    private bool reconnectBusy;
+    private bool reconnectPending;
+    private bool restartObservedStopped;
+    private bool localServerRunning;
+    private int administrationVersion;
+    private DateTimeOffset transitionDeadline;
+    private ServerTransition serverTransition;
 
     public MainWindow()
     {
@@ -76,6 +97,20 @@ public sealed partial class MainWindow : Window
         contentHost = Require<ContentControl>("ContentHost");
         pageTitle = Require<TextBlock>("PageTitle");
         pageSubtitle = Require<TextBlock>("PageSubtitle");
+        serverSummaryName = Require<TextBlock>("ServerSummaryName");
+        serverSummaryDot = Require<Border>("ServerSummaryDot");
+        serverSummaryReachability = Require<TextBlock>("ServerSummaryReachability");
+        serverSummaryPlayers = Require<TextBlock>("ServerSummaryPlayers");
+        serverSummaryState = Require<TextBlock>("ServerSummaryState");
+        serverSummaryMap = Require<TextBlock>("ServerSummaryMap");
+        serverSummaryPing = Require<TextBlock>("ServerSummaryPing");
+        serverSummaryActionState = Require<TextBlock>("ServerSummaryActionState");
+        serverSummaryStart = Require<Button>("ServerSummaryStart");
+        serverSummaryRestart = Require<Button>("ServerSummaryRestart");
+        serverSummaryShutdown = Require<Button>("ServerSummaryShutdown");
+        serverSummaryStart.Click += async (_, _) => await StartServerAsync();
+        serverSummaryRestart.Click += async (_, _) => await RestartServerAsync();
+        serverSummaryShutdown.Click += async (_, _) => await ShutdownServerAsync();
         adminState = Require<TextBlock>("AdminState");
         connectionDot = Require<Border>("ConnectionDot");
         try
@@ -92,15 +127,32 @@ public sealed partial class MainWindow : Window
 
         InitializeNavigation();
         processTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
-        processTimer.Tick += (_, _) => UpdateProcessState();
+        processTimer.Tick += async (_, _) =>
+        {
+            UpdateProcessState();
+            await TryReconnectLocalAsync();
+        };
         processTimer.Start();
+        serverSummaryTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
+        serverSummaryTimer.Tick += async (_, _) => await RefreshServerSummaryAsync();
+        serverSummaryTimer.Start();
+        ResetServerSummary();
         Opened += async (_, _) =>
         {
             UpdateProcessState();
             if (installation is not null && File.Exists(installation.PairingFile))
+            {
                 await LoadLocalIdentityAsync();
+                if (!administration.Connected && !string.IsNullOrWhiteSpace(password.Text))
+                    await ConnectAsync();
+            }
         };
-        Closing += (_, _) => administration.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        Closing += (_, _) =>
+        {
+            processTimer.Stop();
+            serverSummaryTimer.Stop();
+            administration.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        };
         balanceGroup.SelectionChanged += async (_, _) =>
         {
             if (!busy && administration.Connected && balanceGroup.SelectedItem is string group)
@@ -123,7 +175,7 @@ public sealed partial class MainWindow : Window
             (Require<Button>("ConfigurationNavigation"),
                 new PageDefinition("Configuration", "Configuration", "Configure gameplay, network and map rotation settings.", Scroll(configurationPanel), true)),
             (Require<Button>("BalanceNavigation"),
-                new PageDefinition("Balance", "Balance", "Edit character, weapon and gameplay balance values.", BuildBalance(), true))
+                new PageDefinition("Balancing", "Balancing", "Edit character, weapon and gameplay balancing values.", BuildBalance(), true))
         };
         foreach (var (button, page) in pages)
         {
@@ -154,15 +206,25 @@ public sealed partial class MainWindow : Window
     {
         var icon = new Border
         {
-            Width = 64, Height = 64, CornerRadius = new CornerRadius(20), Background = AccentSoft,
+            Width = 72, Height = 72, CornerRadius = new CornerRadius(22), Background = AccentSoft,
             HorizontalAlignment = HorizontalAlignment.Center,
-            Child = new FluentIcon
+            Child = new PathIcon
             {
-                Icon = FluentIconName.Server, IconVariant = IconVariant.Regular, IconSize = IconSize.Size20,
-                Width = 20, Height = 20, Foreground = Accent,
-                HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center
+                Data = StreamGeometry.Parse(
+                    "M4 3 L20 3 L20 9 L4 9 Z M6 5 L8 5 L8 7 L6 7 Z " +
+                    "M4 10 L20 10 L20 16 L4 16 Z M6 12 L8 12 L8 14 L6 14 Z " +
+                    "M4 17 L20 17 L20 23 L4 23 Z M6 19 L8 19 L8 21 L6 21 Z"),
+                Width = 40, Height = 40, Foreground = Accent,
+                HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
             }
         };
+        var openAdministration = ActionButton("Open administration", Info, () =>
+        {
+            var target = pageDefinitions.First(x => x.Value.Name == "Administration").Key;
+            SelectPage(target);
+            return Task.CompletedTask;
+        }, FluentIconName.PlugConnected);
+        openAdministration.HorizontalAlignment = HorizontalAlignment.Center;
         var content = new StackPanel
         {
             Spacing = 12, HorizontalAlignment = HorizontalAlignment.Center,
@@ -180,12 +242,7 @@ public sealed partial class MainWindow : Window
                     Text = "Connect to a running Briefcase server to view and manage this section.",
                     Foreground = Muted, TextAlignment = TextAlignment.Center, TextWrapping = TextWrapping.Wrap
                 },
-                ActionButton("Open administration", Info, () =>
-                {
-                    var target = pageDefinitions.First(x => x.Value.Name == "Administration").Key;
-                    SelectPage(target);
-                    return Task.CompletedTask;
-                }, FluentIconName.PlugConnected)
+                openAdministration
             }
         };
         return new Grid
@@ -210,9 +267,14 @@ public sealed partial class MainWindow : Window
         adminState.Foreground = connected ? Success : Muted;
         connectionDot.Background = connected ? Success : Danger;
         if (!connected)
+        {
+            administrationVersion = 0;
             overview.Text = "No server is connected. Enter the administration identity above, then connect to load its status.";
+            ResetServerSummary();
+        }
         if (refreshAdministrationButton is not null) refreshAdministrationButton.IsEnabled = connected;
         if (disconnectAdministrationButton is not null) disconnectAdministrationButton.IsEnabled = connected;
+        UpdateServerActions();
         if (selectedNavigation is not null) SelectPage(selectedNavigation);
     }
 
@@ -366,6 +428,11 @@ public sealed partial class MainWindow : Window
         await GuardAsync(async () =>
         {
             _ = installation?.StartServer() ?? throw new InvalidOperationException("No valid installation was found.");
+            serverTransition = ServerTransition.Starting;
+            reconnectPending = true;
+            restartObservedStopped = false;
+            transitionDeadline = DateTimeOffset.UtcNow.AddSeconds(90);
+            UpdateServerActions();
             Show("The native launcher started. Updates are checked before the dedicated server starts.", "success");
             await Task.Delay(1200);
             UpdateProcessState();
@@ -431,6 +498,7 @@ public sealed partial class MainWindow : Window
     private async Task RefreshAdministrationCoreAsync()
     {
         var status = (await administration.RequestAsync("server.status")).AsObject();
+        await UpdateServerSummaryAsync(status);
         mods = (await administration.RequestAsync("mods.list")).AsArray();
         overview.Text =
             $"Briefcase {status["framework"]}  ·  Game {status["gameBuild"]}\n" +
@@ -451,6 +519,92 @@ public sealed partial class MainWindow : Window
         }
         Show("Server data refreshed.", "success");
     }
+
+    private async Task RefreshServerSummaryAsync()
+    {
+        if (!administration.Connected || serverSummaryBusy)
+        {
+            if (!administration.Connected) ResetServerSummary();
+            return;
+        }
+        serverSummaryBusy = true;
+        try
+        {
+            var status = (await administration.RequestAsync("server.status")).AsObject();
+            await UpdateServerSummaryAsync(status);
+        }
+        catch
+        {
+            serverSummaryDot.Background = Danger;
+            serverSummaryReachability.Text = "Unavailable";
+            serverSummaryPing.Text = "— ms";
+        }
+        finally
+        {
+            serverSummaryBusy = false;
+        }
+    }
+
+    private async Task UpdateServerSummaryAsync(JsonObject status)
+    {
+        administrationVersion = status["administrationVersion"]?.GetValue<int>() ?? 0;
+        UpdateServerActions();
+        var session = status["session"] as JsonObject;
+        var available = session?["available"]?.GetValue<bool>() == true;
+        serverSummaryName.Text = available
+            ? session?["name"]?.GetValue<string>() ?? "Dedicated server"
+            : "Server is starting";
+        var players = session?["players"]?.GetValue<long>();
+        var maximum = session?["maxPlayers"]?.GetValue<long>();
+        serverSummaryPlayers.Text = players.HasValue && maximum.HasValue
+            ? $"{players} / {maximum} players"
+            : "— players";
+        serverSummaryState.Text = session?["state"]?.GetValue<string>() ?? "Starting";
+        var map = FriendlyMapName(session?["map"]?.GetValue<string>());
+        var mode = session?["gameMode"]?.GetValue<string>();
+        serverSummaryMap.Text = string.Join(" · ", new[] { map, mode }.Where(x => !string.IsNullOrWhiteSpace(x)));
+        if (string.IsNullOrWhiteSpace(serverSummaryMap.Text)) serverSummaryMap.Text = "—";
+
+        var queryPort = session?["queryPort"]?.GetValue<int>();
+        if (!queryPort.HasValue)
+        {
+            serverSummaryDot.Background = available ? Info : Danger;
+            serverSummaryReachability.Text = available ? "Connected" : "Starting";
+            serverSummaryPing.Text = "— ms";
+            return;
+        }
+        var host = AdminEndpoint.Parse(endpoint.Text ?? AdminEndpoint.DefaultValue).Host;
+        var query = await serverQuery.ProbeAsync(host, queryPort.Value, TimeSpan.FromMilliseconds(900));
+        serverSummaryDot.Background = query.Reachable ? Success : Danger;
+        serverSummaryReachability.Text = query.Reachable ? "Online" : "No query";
+        serverSummaryPing.Text = query.Reachable
+            ? $"{Math.Max(1, Math.Round(query.LatencyMilliseconds)):0} ms"
+            : "— ms";
+    }
+
+    private void ResetServerSummary()
+    {
+        serverSummaryName.Text = "No server connected";
+        serverSummaryDot.Background = Danger;
+        serverSummaryReachability.Text = "Offline";
+        serverSummaryPlayers.Text = "— players";
+        serverSummaryState.Text = "Unknown";
+        serverSummaryMap.Text = "—";
+        serverSummaryPing.Text = "— ms";
+        UpdateServerActions();
+    }
+
+    private static string FriendlyMapName(string? value) => value switch
+    {
+        "HardSell" or "Hardsell" or "Hardsell_Day" or "DI_Hardsell" => "Hard Sell",
+        "SilverReef" or "Silverreef" or "DI_SR" => "Silver Reef",
+        "DiamondSpire" or "Diamondspire" or "DI_DS" => "Diamond Spire",
+        "FragrantShore" or "DI_FS" => "Fragrant Shore",
+        "SoundEclipse" or "DI_SE" => "Sound Eclipse",
+        "FragrantShore_Night" or "DI_FSN" => "Fragrant Shore (Night)",
+        "HardSell_Dawn" or "DI_HSD" => "Hard Sell (Morning)",
+        _ => value ?? ""
+    };
 
     private async Task LoadModsAsync()
     {
@@ -570,10 +724,30 @@ public sealed partial class MainWindow : Window
         await GuardAsync(async () =>
         {
             await administration.RequestAsync("server.restart");
+            serverTransition = ServerTransition.Restarting;
+            reconnectPending = installation is not null;
+            restartObservedStopped = false;
+            transitionDeadline = DateTimeOffset.UtcNow.AddSeconds(90);
             await administration.LogoutAsync();
             ClearAdministrationViews();
             UpdateConnectionUi();
             Show("Server restart requested. Reconnect after startup completes.", "warning");
+        });
+    }
+
+    private async Task ShutdownServerAsync()
+    {
+        await GuardAsync(async () =>
+        {
+            await administration.RequestAsync("server.shutdown");
+            serverTransition = ServerTransition.Stopping;
+            reconnectPending = false;
+            restartObservedStopped = false;
+            transitionDeadline = DateTimeOffset.UtcNow.AddSeconds(30);
+            await administration.LogoutAsync();
+            ClearAdministrationViews();
+            UpdateConnectionUi();
+            Show("Server shutdown requested.", "warning");
         });
     }
 
@@ -643,7 +817,13 @@ public sealed partial class MainWindow : Window
 
     private void UpdateProcessState()
     {
-        if (installation is null) { processState.Text = "Installation unavailable"; return; }
+        if (installation is null)
+        {
+            localServerRunning = false;
+            processState.Text = "Installation unavailable";
+            UpdateServerActions();
+            return;
+        }
         var name = Path.GetFileNameWithoutExtension(installation.ShippingPath);
         var running = Process.GetProcessesByName(name).Any(process =>
         {
@@ -651,8 +831,81 @@ public sealed partial class MainWindow : Window
             catch { return false; }
             finally { process.Dispose(); }
         });
-        processState.Text = running ? "Running" : "Stopped";
+        localServerRunning = running;
+        if (serverTransition == ServerTransition.Restarting)
+        {
+            if (!running) restartObservedStopped = true;
+            if (restartObservedStopped && running) serverTransition = ServerTransition.None;
+        }
+        else if (serverTransition == ServerTransition.Starting && running)
+            serverTransition = ServerTransition.None;
+        else if (serverTransition == ServerTransition.Stopping && !running)
+            serverTransition = ServerTransition.None;
+        if (serverTransition != ServerTransition.None && DateTimeOffset.UtcNow >= transitionDeadline)
+        {
+            serverTransition = ServerTransition.None;
+            reconnectPending = false;
+        }
+        processState.Text = serverTransition switch
+        {
+            ServerTransition.Starting => "Starting",
+            ServerTransition.Restarting => "Restarting",
+            ServerTransition.Stopping => "Stopping",
+            _ => running ? "Running" : "Stopped"
+        };
         processState.Foreground = running ? Success : null;
+        UpdateServerActions();
+    }
+
+    private void UpdateServerActions()
+    {
+        var transitioning = serverTransition != ServerTransition.None;
+        serverSummaryStart.IsVisible = installation is not null && !localServerRunning &&
+                                       !administration.Connected && !transitioning;
+        serverSummaryRestart.IsVisible = administration.Connected && !transitioning;
+        serverSummaryShutdown.IsVisible = administration.Connected && administrationVersion >= 4 &&
+                                          !transitioning;
+        serverSummaryActionState.Text = serverTransition switch
+        {
+            ServerTransition.Starting => "Starting server…",
+            ServerTransition.Restarting => "Restarting server…",
+            ServerTransition.Stopping => "Shutting down server…",
+            _ when administration.Connected => "Server controls",
+            _ when localServerRunning => "Connecting…",
+            _ when installation is not null => "Local server stopped",
+            _ => "Remote start unavailable"
+        };
+    }
+
+    private async Task TryReconnectLocalAsync()
+    {
+        if (!reconnectPending || reconnectBusy || administration.Connected || !localServerRunning ||
+            installation is null)
+            return;
+        if (DateTimeOffset.UtcNow >= transitionDeadline)
+        {
+            reconnectPending = false;
+            return;
+        }
+        reconnectBusy = true;
+        try
+        {
+            var identity = await installation.ReadAdministrationAsync();
+            await administration.ConnectAsync(identity.Endpoint, identity.Fingerprint, identity.Password);
+            reconnectPending = false;
+            serverTransition = ServerTransition.None;
+            UpdateConnectionUi();
+            await RefreshAdministrationCoreAsync();
+            Show("Server is running and administration reconnected.", "success");
+        }
+        catch
+        {
+            // The process can exist for several seconds before its TLS listener is ready.
+        }
+        finally
+        {
+            reconnectBusy = false;
+        }
     }
 
     private async Task GuardAsync(Func<Task> operation)
@@ -751,6 +1004,8 @@ public sealed partial class MainWindow : Window
             Content = content, Background = color, Foreground = Brushes.White, MinHeight = 38,
             Padding = new Thickness(15, 8), HorizontalContentAlignment = HorizontalAlignment.Center
         };
+        button.Classes.Add(ReferenceEquals(color, Success) ? "action-success" :
+            ReferenceEquals(color, Danger) ? "action-danger" : "action-info");
         button.Click += async (_, _) => await action();
         return button;
     }
@@ -762,4 +1017,12 @@ public sealed partial class MainWindow : Window
 
     private sealed record PageDefinition(string Name, string Title, string Subtitle, Control Content,
         bool RequiresConnection);
+
+    private enum ServerTransition
+    {
+        None,
+        Starting,
+        Restarting,
+        Stopping
+    }
 }

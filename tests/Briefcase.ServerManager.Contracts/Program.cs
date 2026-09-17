@@ -1,6 +1,7 @@
 using Briefcase.ServerManager.Core;
 using System.IO.Compression;
 using System.Net;
+using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
@@ -28,6 +29,19 @@ Reject(() => AdminEndpoint.Parse("host:0"), "Invalid port accepted");
 Check(AdminConnection.NormalizeFingerprint(string.Join(':', Enumerable.Repeat("AA", 32))) == new string('a', 64),
     "Fingerprint normalization");
 Reject(() => AdminConnection.NormalizeFingerprint("abcd"), "Short fingerprint accepted");
+
+using (var echo = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0)))
+{
+    var echoPort = ((IPEndPoint)echo.Client.LocalEndPoint!).Port;
+    var responder = Task.Run(async () =>
+    {
+        var request = await echo.ReceiveAsync();
+        await echo.SendAsync(request.Buffer, request.RemoteEndPoint);
+    });
+    var probe = await new ServerQueryClient().ProbeAsync("127.0.0.1", echoPort, TimeSpan.FromSeconds(2));
+    await responder;
+    Check(probe.Reachable && probe.LatencyMilliseconds >= 0, "Query port echo probe");
+}
 
 var fixture = Path.Combine(Path.GetTempPath(), "briefcase-manager-contracts-" + Guid.NewGuid().ToString("N"));
 try

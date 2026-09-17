@@ -33,36 +33,65 @@ internal sealed class SettingsEditor
         var properties = schema["properties"]?.AsObject() ?? throw new InvalidDataException("Missing settings properties.");
         var saved = document["saved"]?.AsObject() ?? throw new InvalidDataException("Missing saved settings.");
         var root = new StackPanel { Spacing = 10 };
-        string? previousCategory = null;
+        var groups = new Dictionary<string, List<KeyValuePair<string, JsonObject>>>(StringComparer.Ordinal);
+        var categoryLabels = new Dictionary<string, string>(StringComparer.Ordinal);
+        var discoveredCategories = new List<string>();
         foreach (var property in properties)
         {
             if (property.Value is not JsonObject descriptor) continue;
-            var category = descriptor["categoryLabel"]?.GetValue<string>() ??
-                           descriptor["category"]?.GetValue<string>() ?? "General";
-            if (!string.Equals(category, previousCategory, StringComparison.Ordinal))
+            var category = descriptor["category"]?.GetValue<string>() ?? "general";
+            if (!groups.TryGetValue(category, out var fields))
             {
-                root.Children.Add(new TextBlock
-                {
-                    Text = Humanize(category), FontWeight = FontWeight.Bold, FontSize = 16,
-                    Margin = new Thickness(0, previousCategory is null ? 0 : 12, 0, 2)
-                });
-                previousCategory = category;
+                fields = [];
+                groups.Add(category, fields);
+                discoveredCategories.Add(category);
+                categoryLabels[category] = descriptor["categoryLabel"]?.GetValue<string>() ?? Humanize(category);
             }
-            var type = descriptor["type"]?.GetValue<string>() ?? "string";
-            var value = saved[property.Key];
-            var control = CreateControl(property.Key, type, value, descriptor);
-            controls[property.Key] = (type, control);
-            var label = descriptor["displayName"]?.GetValue<string>() ??
-                        descriptor["description"]?.GetValue<string>() ?? Humanize(property.Key);
-            var row = new Grid { ColumnDefinitions = new ColumnDefinitions("260,*"), ColumnSpacing = 14 };
-            row.Children.Add(new TextBlock
+            fields.Add(new KeyValuePair<string, JsonObject>(property.Key, descriptor));
+        }
+
+        var categoryOrder = new List<string>();
+        if (schema["categoryOrder"] is JsonArray declaredOrder)
+            foreach (var item in declaredOrder)
             {
-                Text = label, VerticalAlignment = VerticalAlignment.Center,
-                TextWrapping = TextWrapping.Wrap, Margin = new Thickness(4, 0)
+                var category = item?.GetValue<string>();
+                if (category is not null && groups.ContainsKey(category) && !categoryOrder.Contains(category))
+                    categoryOrder.Add(category);
+            }
+        foreach (var category in new[] { "identity", "network", "gameplay", "bots", "maps", "heat" })
+            if (groups.ContainsKey(category) && !categoryOrder.Contains(category))
+                categoryOrder.Add(category);
+        foreach (var category in discoveredCategories)
+            if (!categoryOrder.Contains(category))
+                categoryOrder.Add(category);
+
+        for (var categoryIndex = 0; categoryIndex < categoryOrder.Count; categoryIndex++)
+        {
+            var category = categoryOrder[categoryIndex];
+            root.Children.Add(new TextBlock
+            {
+                Text = categoryLabels[category], FontWeight = FontWeight.Bold, FontSize = 16,
+                Margin = new Thickness(0, categoryIndex == 0 ? 0 : 12, 0, 2)
             });
-            Grid.SetColumn(control, 1);
-            row.Children.Add(control);
-            root.Children.Add(row);
+            foreach (var property in groups[category])
+            {
+                var descriptor = property.Value;
+                var type = descriptor["type"]?.GetValue<string>() ?? "string";
+                var value = saved[property.Key];
+                var control = CreateControl(property.Key, type, value, descriptor);
+                controls[property.Key] = (type, control);
+                var label = descriptor["displayName"]?.GetValue<string>() ??
+                            descriptor["description"]?.GetValue<string>() ?? Humanize(property.Key);
+                var row = new Grid { ColumnDefinitions = new ColumnDefinitions("260,*"), ColumnSpacing = 14 };
+                row.Children.Add(new TextBlock
+                {
+                    Text = label, VerticalAlignment = VerticalAlignment.Center,
+                    TextWrapping = TextWrapping.Wrap, Margin = new Thickness(4, 0)
+                });
+                Grid.SetColumn(control, 1);
+                row.Children.Add(control);
+                root.Children.Add(row);
+            }
         }
         View = new Border
         {
@@ -91,17 +120,23 @@ internal sealed class SettingsEditor
         }
         if (type == "array")
         {
-            if (descriptor["enum"] is JsonArray arrayOptions)
+            var isMapRotation = string.Equals(key, "MapRotation", StringComparison.Ordinal);
+            var arrayOptions = descriptor["enum"] as JsonArray ??
+                               (descriptor["items"] as JsonObject)?["enum"] as JsonArray;
+            if (isMapRotation || arrayOptions is not null)
             {
-                var available = arrayOptions.Select(x => x?.GetValue<string>() ?? "")
-                    .Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.Ordinal).ToArray();
+                var available = isMapRotation
+                    ? MapNames.Keys.ToArray()
+                    : arrayOptions!.Select(x => x?.GetValue<string>() ?? "")
+                        .Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.Ordinal).ToArray();
                 var selected = value is JsonArray arrayValues
-                    ? arrayValues.Select(x => x?.GetValue<string>() ?? "").Where(available.Contains).ToArray()
+                    ? arrayValues.Select(x => x?.GetValue<string>() ?? "")
+                        .Where(x => available.Contains(x, StringComparer.Ordinal)).ToArray()
                     : [];
                 return new ChoiceArrayEditor(available, selected,
-                    option => key == "MapRotation" && MapNames.TryGetValue(option, out var name)
+                    option => isMapRotation && MapNames.TryGetValue(option, out var name)
                         ? name : Humanize(option),
-                    key == "MapRotation");
+                    isMapRotation);
             }
             var text = value is JsonArray values
                 ? string.Join(", ", values.Select(x => x?.GetValue<string>() ?? "")) : "";
