@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Briefcase.ServerManager.Core/Briefcase.ServerManager.Core.csproj" />
+    <Project Path="src/Briefcase.ServerManager/Briefcase.ServerManager.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Briefcase.ServerManager.Contracts/Briefcase.ServerManager.Contracts.csproj" />
+  </Folder>
+</Solution>
