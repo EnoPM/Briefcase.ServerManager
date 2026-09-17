@@ -19,10 +19,10 @@ void Reject(Action action, string message)
     throw new InvalidOperationException(message);
 }
 
-var ipv4 = AdminEndpoint.Parse("127.0.0.1:50002");
-Check(ipv4.Host == "127.0.0.1" && ipv4.Port == 50002, "IPv4 endpoint parsing");
-var ipv6 = AdminEndpoint.Parse("[::1]:50002");
-Check(ipv6.Host == "::1" && ipv6.ToString() == "[::1]:50002", "IPv6 endpoint parsing");
+var ipv4 = AdminEndpoint.Parse("127.0.0.1:32189");
+Check(ipv4.Host == "127.0.0.1" && ipv4.Port == 32189, "IPv4 endpoint parsing");
+var ipv6 = AdminEndpoint.Parse("[::1]:32189");
+Check(ipv6.Host == "::1" && ipv6.ToString() == "[::1]:32189", "IPv6 endpoint parsing");
 Reject(() => AdminEndpoint.Parse("127.0.0.1"), "Missing port accepted");
 Reject(() => AdminEndpoint.Parse("host:0"), "Invalid port accepted");
 Check(AdminConnection.NormalizeFingerprint(string.Join(':', Enumerable.Repeat("AA", 32))) == new string('a', 64),

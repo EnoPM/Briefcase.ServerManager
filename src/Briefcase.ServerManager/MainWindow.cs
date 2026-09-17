@@ -34,9 +34,9 @@ public sealed class MainWindow : Window
     private readonly List<Button> navigation = [];
     private readonly TextBlock adminState = new() { Text = "Disconnected" };
     private readonly TextBox listen = new() { Text = "127.0.0.1", MinHeight = 36 };
-    private readonly NumericUpDown port = new() { Value = 50002, Minimum = 1, Maximum = 65535, Increment = 1, MinHeight = 36 };
-    private readonly TextBox publicEndpoint = new() { Text = "127.0.0.1:50002", MinHeight = 36 };
-    private readonly TextBox endpoint = new() { Text = "127.0.0.1:50002", MinHeight = 36 };
+    private readonly NumericUpDown port = new() { Value = AdminEndpoint.DefaultPort, Minimum = 1, Maximum = 65535, Increment = 1, MinHeight = 36 };
+    private readonly TextBox publicEndpoint = new() { Text = AdminEndpoint.DefaultValue, MinHeight = 36 };
+    private readonly TextBox endpoint = new() { Text = AdminEndpoint.DefaultValue, MinHeight = 36 };
     private readonly TextBox fingerprint = new() { MinHeight = 36 };
     private readonly TextBox password = new() { PasswordChar = '●', MinHeight = 36 };
     private readonly TextBlock overview = new() { TextWrapping = TextWrapping.Wrap };

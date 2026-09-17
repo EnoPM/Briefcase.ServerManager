@@ -4,6 +4,10 @@ namespace Briefcase.ServerManager.Core;
 
 public readonly record struct AdminEndpoint(string Host, int Port)
 {
+    public const int DefaultPort = 32189;
+    public const string DefaultHost = "127.0.0.1";
+    public const string DefaultValue = "127.0.0.1:32189";
+
     public static AdminEndpoint Parse(string value)
     {
         value = value.Trim();
