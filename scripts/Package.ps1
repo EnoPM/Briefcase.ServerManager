@@ -14,8 +14,9 @@ if($version -cnotmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'){th
 if(-not(Test-Path -LiteralPath $publish -PathType Container)){throw 'Publish directory is missing.'}
 $executable=if($Platform -eq 'windows-x64'){'Briefcase.ServerManager.exe'}else{'Briefcase.ServerManager'}
 if(-not(Test-Path -LiteralPath (Join-Path $publish $executable) -PathType Leaf)){throw 'Published manager is missing.'}
-$files=@(Get-ChildItem -LiteralPath $publish -File|Where-Object {$_.Extension -ne '.pdb'})
+$files=@(Get-ChildItem -LiteralPath $publish -File|Where-Object {$_.Extension -notin @('.pdb','.dbg')})
 if(-not $files -or @($files|Where-Object {$_.Extension -in @('.json','.config')}).Count){throw 'Unexpected framework-dependent publication.'}
+if(@($files|Where-Object {$_.Name -eq $executable}).Count -ne 1 -or $files.Count -ne 1){throw 'The release must contain one self-extracting executable.'}
 New-Item -ItemType Directory -Path $output -Force|Out-Null
 $stage=Join-Path $project ('artifacts/package-'+$Platform)
 if(Test-Path -LiteralPath $stage){Remove-Item -LiteralPath $stage -Recurse -Force}

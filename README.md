@@ -24,6 +24,9 @@ UI starts it and never replaces its update, injection or headless behavior.
 
 Download the archive for your operating system from the latest release, extract
 it anywhere and run `Briefcase.ServerManager`. The .NET runtime is not required.
+The application is distributed as one executable. Its verified Avalonia native
+payload is extracted into the current user's private, versioned cache on first
+start.
 
 Choose the dedicated server folder created by SteamCMD. The manager accepts the
 server root, `DeceiveInc/Binaries/Win64`, or `DeceiveInc/Binaries/Linux`.
@@ -42,6 +45,10 @@ rejected.
 The administration client validates the exact SHA-256 fingerprint of the server
 certificate before sending the password. TLS 1.2 or TLS 1.3 is required.
 
+The single-file bootstrap verifies the size and SHA-256 digest of every embedded
+application file before launch. Modified cache entries are replaced from the
+signed executable on the next start.
+
 ## Development
 
 Open `Briefcase.ServerManager.slnx` in JetBrains Rider. The UI uses Avalonia
@@ -51,7 +58,7 @@ Open `Briefcase.ServerManager.slnx` in JetBrains Rider. The UI uses Avalonia
 dotnet restore Briefcase.ServerManager.slnx
 dotnet build Briefcase.ServerManager.slnx -c Release
 dotnet run --project tests/Briefcase.ServerManager.Contracts -c Release
-dotnet publish src/Briefcase.ServerManager -c Release -r win-x64
+./scripts/Publish-SingleFile.ps1 -Platform windows-x64 -NoRestore
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for repository rules.

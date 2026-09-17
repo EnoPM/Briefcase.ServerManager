@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/Briefcase.ServerManager.Core/Briefcase.ServerManager.Core.csproj" />
+    <Project Path="src/Briefcase.ServerManager.Bootstrap/Briefcase.ServerManager.Bootstrap.csproj" />
     <Project Path="src/Briefcase.ServerManager/Briefcase.ServerManager.csproj" />
   </Folder>
   <Folder Name="/tests/">

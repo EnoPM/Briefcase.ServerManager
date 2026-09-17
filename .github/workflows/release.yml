@@ -40,7 +40,9 @@ jobs:
           dotnet build Briefcase.ServerManager.slnx -c Release --no-restore
           dotnet run --project tests/Briefcase.ServerManager.Contracts -c Release --no-build
       - name: Publish Native AOT
-        run: dotnet publish src/Briefcase.ServerManager/Briefcase.ServerManager.csproj -c Release -r win-x64 --no-restore -o artifacts/publish/windows-x64
+        run: ./scripts/Publish-SingleFile.ps1 -Platform windows-x64 -NoRestore
+      - name: Test single-file bootstrap
+        run: ./artifacts/publish/windows-x64/Briefcase.ServerManager.exe --bootstrap-self-test
       - name: Package
         run: ./scripts/Package.ps1 -PublishDirectory artifacts/publish/windows-x64 -Platform windows-x64
       - name: Upload Windows release
@@ -72,7 +74,10 @@ jobs:
           dotnet build Briefcase.ServerManager.slnx -c Release --no-restore
           dotnet run --project tests/Briefcase.ServerManager.Contracts -c Release --no-build
       - name: Publish Native AOT
-        run: dotnet publish src/Briefcase.ServerManager/Briefcase.ServerManager.csproj -c Release -r linux-x64 --no-restore -o artifacts/publish/linux-x64
+        shell: pwsh
+        run: ./scripts/Publish-SingleFile.ps1 -Platform linux-x64 -NoRestore
+      - name: Test single-file bootstrap
+        run: ./artifacts/publish/linux-x64/Briefcase.ServerManager --bootstrap-self-test
       - name: Package
         shell: pwsh
         run: ./scripts/Package.ps1 -PublishDirectory artifacts/publish/linux-x64 -Platform linux-x64

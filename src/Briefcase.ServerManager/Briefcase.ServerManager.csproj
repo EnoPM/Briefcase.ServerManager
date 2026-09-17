@@ -13,7 +13,7 @@
     <InvariantGlobalization>false</InvariantGlobalization>
     <TrimMode>full</TrimMode>
     <Version>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)..\..\VERSION').Trim())</Version>
-    <AssemblyName>Briefcase.ServerManager</AssemblyName>
+    <AssemblyName>Briefcase.ServerManager.App</AssemblyName>
     <RootNamespace>Briefcase.ServerManager</RootNamespace>
   </PropertyGroup>
   <ItemGroup>

@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <PublishAot>true</PublishAot>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifiers>win-x64;linux-x64</RuntimeIdentifiers>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <StripSymbols>true</StripSymbols>
+    <AssemblyName>Briefcase.ServerManager</AssemblyName>
+    <RootNamespace>Briefcase.ServerManager.Bootstrap</RootNamespace>
+    <Version>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)..\..\VERSION').Trim())</Version>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(PayloadDirectory)' != ''">
+    <EmbeddedResource Include="$(PayloadDirectory)\*" LogicalName="payload/%(Filename)%(Extension)" />
+  </ItemGroup>
+</Project>

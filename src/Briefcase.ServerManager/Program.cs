@@ -4,7 +4,8 @@ namespace Briefcase.ServerManager;
 
 internal static class Program
 {
-    public static string ApplicationDirectory { get; private set; } = AppContext.BaseDirectory;
+    public static string ApplicationDirectory { get; private set; } =
+        Environment.GetEnvironmentVariable("BRIEFCASE_SERVER_MANAGER_HOME") ?? AppContext.BaseDirectory;
 
     [STAThread]
     public static void Main(string[] args)
