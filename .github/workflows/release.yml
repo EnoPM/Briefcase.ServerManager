@@ -53,44 +53,8 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
-  linux:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
-        with:
-          global-json-file: global.json
-          cache: true
-          cache-dependency-path: '**/packages.lock.json'
-      - name: Install Native AOT prerequisites
-        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y clang zlib1g-dev
-      - name: Restore locked dependencies
-        run: dotnet restore Briefcase.ServerManager.slnx --locked-mode
-      - name: Build and test
-        run: |
-          dotnet build Briefcase.ServerManager.slnx -c Release --no-restore
-          dotnet run --project tests/Briefcase.ServerManager.Contracts -c Release --no-build
-      - name: Publish Native AOT
-        shell: pwsh
-        run: ./scripts/Publish-SingleFile.ps1 -Platform linux-x64 -NoRestore
-      - name: Test single-file bootstrap
-        run: ./artifacts/publish/linux-x64/Briefcase.ServerManager --bootstrap-self-test
-      - name: Package
-        shell: pwsh
-        run: ./scripts/Package.ps1 -PublishDirectory artifacts/publish/linux-x64 -Platform linux-x64
-      - name: Upload Linux release
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: server-manager-linux
-          path: artifacts/release/*.zip
-          if-no-files-found: error
-          compression-level: 0
-
   publish:
-    needs: [windows, linux]
+    needs: windows
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:

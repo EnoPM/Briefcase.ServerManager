@@ -4,11 +4,24 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
+using FluentIcons.Avalonia;
+using FluentIcons.Common;
 
 namespace Briefcase.ServerManager;
 
 internal sealed class SettingsEditor
 {
+    private static readonly IReadOnlyDictionary<string, string> MapNames = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["DI_Hardsell"] = "Hard Sell",
+        ["DI_SR"] = "Silver Reef",
+        ["DI_DS"] = "Diamond Spire",
+        ["DI_FS"] = "Fragrant Shore",
+        ["DI_SE"] = "Sound Eclipse",
+        ["DI_FSN"] = "Fragrant Shore (Night)",
+        ["DI_HSD"] = "Hard Sell (Morning)"
+    };
+
     private readonly Dictionary<string, (string Type, Control Control)> controls = new(StringComparer.Ordinal);
     public Border View { get; }
     public string Revision { get; }
@@ -37,7 +50,7 @@ internal sealed class SettingsEditor
             }
             var type = descriptor["type"]?.GetValue<string>() ?? "string";
             var value = saved[property.Key];
-            var control = CreateControl(type, value, descriptor);
+            var control = CreateControl(property.Key, type, value, descriptor);
             controls[property.Key] = (type, control);
             var label = descriptor["displayName"]?.GetValue<string>() ??
                         descriptor["description"]?.GetValue<string>() ?? Humanize(property.Key);
@@ -53,13 +66,13 @@ internal sealed class SettingsEditor
         }
         View = new Border
         {
-            Background = new SolidColorBrush(Color.Parse("#18141F")),
-            BorderBrush = new SolidColorBrush(Color.Parse("#5C4F6E")), BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(8), Padding = new Thickness(22, 20), Child = root
+            Background = new SolidColorBrush(Color.Parse("#19151F")),
+            BorderBrush = new SolidColorBrush(Color.Parse("#332A3D")), BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(12), Padding = new Thickness(22, 20), Child = root
         };
     }
 
-    private static Control CreateControl(string type, JsonNode? value, JsonObject descriptor)
+    private static Control CreateControl(string key, string type, JsonNode? value, JsonObject descriptor)
     {
         if (type == "boolean")
             return new CheckBox { IsChecked = value?.GetValue<bool>() ?? false, MinHeight = 32 };
@@ -78,6 +91,18 @@ internal sealed class SettingsEditor
         }
         if (type == "array")
         {
+            if (descriptor["enum"] is JsonArray arrayOptions)
+            {
+                var available = arrayOptions.Select(x => x?.GetValue<string>() ?? "")
+                    .Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.Ordinal).ToArray();
+                var selected = value is JsonArray arrayValues
+                    ? arrayValues.Select(x => x?.GetValue<string>() ?? "").Where(available.Contains).ToArray()
+                    : [];
+                return new ChoiceArrayEditor(available, selected,
+                    option => key == "MapRotation" && MapNames.TryGetValue(option, out var name)
+                        ? name : Humanize(option),
+                    key == "MapRotation");
+            }
             var text = value is JsonArray values
                 ? string.Join(", ", values.Select(x => x?.GetValue<string>() ?? "")) : "";
             return new TextBox { Text = text, MinHeight = 36, PlaceholderText = "Comma-separated values" };
@@ -103,6 +128,7 @@ internal sealed class SettingsEditor
                 "boolean" => JsonValue.Create(((CheckBox)control).IsChecked == true),
                 "integer" => JsonValue.Create((long)(((NumericUpDown)control).Value ?? 0)),
                 "number" => JsonValue.Create((double)(((NumericUpDown)control).Value ?? 0)),
+                "array" when control is ChoiceArrayEditor choices => choices.ReadValues(),
                 "array" => new JsonArray((((TextBox)control).Text ?? "").Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
                     .Select(x => (JsonNode?)JsonValue.Create(x)).ToArray()),
                 _ when control is ComboBox combo => JsonValue.Create(combo.SelectedItem?.ToString() ?? ""),
@@ -110,6 +136,139 @@ internal sealed class SettingsEditor
             };
         }
         return values;
+    }
+
+    private sealed class ChoiceArrayEditor : Border
+    {
+        private readonly List<Choice> choices;
+        private readonly StackPanel rows = new() { Spacing = 6 };
+        private readonly bool requiresSelection;
+
+        public ChoiceArrayEditor(IEnumerable<string> available, IEnumerable<string> selected,
+            Func<string, string> label, bool requiresSelection)
+        {
+            this.requiresSelection = requiresSelection;
+            var selectedValues = selected.Distinct(StringComparer.Ordinal).ToArray();
+            var selectedSet = selectedValues.ToHashSet(StringComparer.Ordinal);
+            var ordered = selectedValues.Concat(available.Where(x => !selectedSet.Contains(x)));
+            choices = ordered.Select(value => new Choice(value, label(value), selectedSet.Contains(value))).ToList();
+
+            var heading = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 10 };
+            heading.Children.Add(new TextBlock
+            {
+                Text = "Select maps and arrange their rotation order.",
+                VerticalAlignment = VerticalAlignment.Center,
+                Opacity = .72,
+                TextWrapping = TextWrapping.Wrap
+            });
+            var selectAll = new Button
+            {
+                Content = IconLabel(Icon.CheckmarkCircle, "Select all"), MinHeight = 32, Padding = new Thickness(12, 5),
+                HorizontalContentAlignment = HorizontalAlignment.Center
+            };
+            selectAll.Click += (_, _) =>
+            {
+                foreach (var choice in choices) choice.Selected = true;
+                RebuildRows();
+            };
+            Grid.SetColumn(selectAll, 1);
+            heading.Children.Add(selectAll);
+
+            var content = new StackPanel { Spacing = 8 };
+            content.Children.Add(heading);
+            content.Children.Add(rows);
+            Background = new SolidColorBrush(Color.Parse("#211A29"));
+            BorderBrush = new SolidColorBrush(Color.Parse("#332A3D"));
+            BorderThickness = new Thickness(1);
+            CornerRadius = new CornerRadius(6);
+            Padding = new Thickness(10);
+            Child = content;
+            RebuildRows();
+        }
+
+        public JsonArray ReadValues()
+        {
+            var selected = choices.Where(x => x.Selected).Select(x => x.Value).ToArray();
+            if (requiresSelection && selected.Length == 0)
+                throw new InvalidOperationException("Select at least one map for the rotation.");
+            return new JsonArray(selected.Select(x => (JsonNode?)JsonValue.Create(x)).ToArray());
+        }
+
+        private void RebuildRows()
+        {
+            rows.Children.Clear();
+            for (var index = 0; index < choices.Count; index++)
+            {
+                var choice = choices[index];
+                var checkbox = new CheckBox
+                {
+                    IsChecked = choice.Selected,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    MinHeight = 32,
+                    Content = new StackPanel
+                    {
+                        Spacing = 1,
+                        Children =
+                        {
+                            new TextBlock { Text = choice.Label, FontWeight = FontWeight.SemiBold },
+                            new TextBlock { Text = choice.Value, FontSize = 11, Opacity = .58 }
+                        }
+                    }
+                };
+                checkbox.IsCheckedChanged += (_, _) => choice.Selected = checkbox.IsChecked == true;
+
+                var up = OrderButton(Icon.ArrowUp, "Move map earlier", index, -1);
+                var down = OrderButton(Icon.ArrowDown, "Move map later", index, 1);
+                up.IsEnabled = index > 0;
+                down.IsEnabled = index + 1 < choices.Count;
+
+                var row = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto"), ColumnSpacing = 6 };
+                row.Children.Add(checkbox);
+                Grid.SetColumn(up, 1);
+                row.Children.Add(up);
+                Grid.SetColumn(down, 2);
+                row.Children.Add(down);
+                rows.Children.Add(new Border
+                {
+                    Background = new SolidColorBrush(Color.Parse("#27202F")),
+                    CornerRadius = new CornerRadius(5), Padding = new Thickness(10, 6), Child = row
+                });
+            }
+        }
+
+        private Button OrderButton(Icon icon, string tooltip, int index, int direction)
+        {
+            var button = new Button
+            {
+                Content = new FluentIcon { Icon = icon, IconSize = IconSize.Size16 },
+                MinWidth = 34, MinHeight = 32, Padding = new Thickness(8, 4),
+                HorizontalContentAlignment = HorizontalAlignment.Center
+            };
+            ToolTip.SetTip(button, tooltip);
+            button.Click += (_, _) =>
+            {
+                var destination = index + direction;
+                if (destination < 0 || destination >= choices.Count) return;
+                (choices[index], choices[destination]) = (choices[destination], choices[index]);
+                RebuildRows();
+            };
+            return button;
+        }
+
+        private static Control IconLabel(Icon icon, string text)
+        {
+            var content = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 7 };
+            content.Children.Add(new FluentIcon { Icon = icon, IconSize = IconSize.Size16 });
+            content.Children.Add(new TextBlock { Text = text, VerticalAlignment = VerticalAlignment.Center });
+            return content;
+        }
+
+        private sealed class Choice(string value, string label, bool selected)
+        {
+            public string Value { get; } = value;
+            public string Label { get; } = label;
+            public bool Selected { get; set; } = selected;
+        }
     }
 
     private static string Humanize(string value)

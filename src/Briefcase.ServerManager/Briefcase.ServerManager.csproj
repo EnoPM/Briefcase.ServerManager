@@ -15,8 +15,11 @@
     <Version>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)..\..\VERSION').Trim())</Version>
     <AssemblyName>Briefcase.ServerManager.App</AssemblyName>
     <RootNamespace>Briefcase.ServerManager</RootNamespace>
+    <ApplicationIcon>Assets\Briefcase.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
+    <AvaloniaResource Include="Assets\Briefcase.png" />
+    <PackageReference Include="FluentIcons.Avalonia" Version="2.1.341" />
     <ProjectReference Include="..\Briefcase.ServerManager.Core\Briefcase.ServerManager.Core.csproj" />
     <PackageReference Include="Avalonia.Desktop" Version="12.1.2" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.2" />

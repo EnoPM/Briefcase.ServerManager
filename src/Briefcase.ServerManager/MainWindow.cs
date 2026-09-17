@@ -5,34 +5,45 @@ using System.Text.Json.Nodes;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
+using Avalonia.Markup.Xaml;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using Briefcase.ServerManager.Core;
+using FluentIcons.Avalonia;
+using FluentIconName = FluentIcons.Common.Icon;
+using FluentIcons.Common;
 
 namespace Briefcase.ServerManager;
 
-public sealed class MainWindow : Window
+public sealed partial class MainWindow : Window
 {
-    private static readonly IBrush Panel = new SolidColorBrush(Color.Parse("#18141F"));
-    private static readonly IBrush BorderColor = new SolidColorBrush(Color.Parse("#5C4F6E"));
-    private static readonly IBrush Accent = new SolidColorBrush(Color.Parse("#C475F7"));
-    private static readonly IBrush Success = new SolidColorBrush(Color.Parse("#27865D"));
-    private static readonly IBrush Info = new SolidColorBrush(Color.Parse("#2877B7"));
-    private static readonly IBrush Danger = new SolidColorBrush(Color.Parse("#B54250"));
+    private static readonly IBrush Panel = Brush("#19151F");
+    private static readonly IBrush BorderColor = Brush("#332A3D");
+    private static readonly IBrush Accent = Brush("#C47AF2");
+    private static readonly IBrush AccentSoft = Brush("#352044");
+    private static readonly IBrush Muted = Brush("#A99DB0");
+    private static readonly IBrush Success = Brush("#27865D");
+    private static readonly IBrush Info = Brush("#2877B7");
+    private static readonly IBrush Danger = Brush("#B54250");
     private BriefcaseInstallation? installation;
     private readonly BriefcaseReleaseInstaller installer = new();
     private readonly AdminConnection administration = new();
-    private readonly TextBlock notice = new() { TextWrapping = TextWrapping.Wrap };
-    private readonly Border noticeBorder = new() { IsVisible = false, Padding = new Thickness(12), CornerRadius = new CornerRadius(6) };
+    private readonly TextBlock notice;
+    private readonly Border noticeBorder;
+    private readonly FluentIcon noticeIcon;
     private readonly TextBlock processState = new();
     private readonly TextBlock installPath = new();
     private readonly TextBox targetDirectory = new() { MinHeight = 36 };
     private readonly ProgressBar installProgress = new() { Minimum = 0, Maximum = 100, Height = 12, IsVisible = false };
     private readonly TextBlock installStage = new() { TextWrapping = TextWrapping.Wrap, Opacity = .72 };
-    private readonly ContentControl contentHost = new();
+    private readonly ContentControl contentHost;
     private readonly List<Button> navigation = [];
-    private readonly TextBlock adminState = new() { Text = "Disconnected" };
+    private readonly Dictionary<Button, PageDefinition> pageDefinitions = [];
+    private readonly TextBlock pageTitle;
+    private readonly TextBlock pageSubtitle;
+    private readonly TextBlock adminState;
+    private readonly Border connectionDot;
     private readonly TextBox listen = new() { Text = "127.0.0.1", MinHeight = 36 };
     private readonly NumericUpDown port = new() { Value = AdminEndpoint.DefaultPort, Minimum = 1, Maximum = 65535, Increment = 1, MinHeight = 36 };
     private readonly TextBox publicEndpoint = new() { Text = AdminEndpoint.DefaultValue, MinHeight = 36 };
@@ -48,6 +59,9 @@ public sealed class MainWindow : Window
     private readonly ComboBox logSource = new() { ItemsSource = new[] { "framework", "game" }, SelectedIndex = 0, MinWidth = 180 };
     private readonly ComboBox balanceGroup = new() { MinWidth = 220 };
     private readonly DispatcherTimer processTimer;
+    private Button? selectedNavigation;
+    private Button? refreshAdministrationButton;
+    private Button? disconnectAdministrationButton;
     private JsonArray mods = [];
     private JsonObject? selection;
     private JsonObject? balance;
@@ -55,12 +69,15 @@ public sealed class MainWindow : Window
 
     public MainWindow()
     {
-        Title = "Briefcase Server Manager";
-        Width = 1240;
-        Height = 820;
-        MinWidth = 920;
-        MinHeight = 640;
-        Background = new SolidColorBrush(Color.Parse("#110D14"));
+        AvaloniaXamlLoader.Load(this);
+        notice = Require<TextBlock>("NoticeText");
+        noticeBorder = Require<Border>("NoticeBorder");
+        noticeIcon = Require<FluentIcon>("NoticeIcon");
+        contentHost = Require<ContentControl>("ContentHost");
+        pageTitle = Require<TextBlock>("PageTitle");
+        pageSubtitle = Require<TextBlock>("PageSubtitle");
+        adminState = Require<TextBlock>("AdminState");
+        connectionDot = Require<Border>("ConnectionDot");
         try
         {
             installation = BriefcaseInstallation.Locate(Program.ApplicationDirectory);
@@ -73,8 +90,7 @@ public sealed class MainWindow : Window
             targetDirectory.Text = Program.ApplicationDirectory;
         }
 
-        noticeBorder.Child = notice;
-        Content = BuildLayout();
+        InitializeNavigation();
         processTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
         processTimer.Tick += (_, _) => UpdateProcessState();
         processTimer.Start();
@@ -92,78 +108,119 @@ public sealed class MainWindow : Window
         };
     }
 
-    private Control BuildLayout()
+    private void InitializeNavigation()
     {
-        var header = new Grid
+        var pages = new (Button Button, PageDefinition Page)[]
         {
-            ColumnDefinitions = new ColumnDefinitions("*,Auto"),
-            Margin = new Thickness(22, 18, 22, 12)
+            (Require<Button>("HomeNavigation"),
+                new PageDefinition("Home", "Overview", "Install, update and launch your dedicated server.", BuildHome(), false)),
+            (Require<Button>("AdministrationNavigation"),
+                new PageDefinition("Administration", "Administration", "Connect securely to a local or remote Briefcase server.", BuildConnection(), false)),
+            (Require<Button>("ModsNavigation"),
+                new PageDefinition("Mods", "Mods", "Inspect installed mods and edit their settings.", Scroll(modsPanel), true)),
+            (Require<Button>("ServerNavigation"),
+                new PageDefinition("Server", "Server", "Manage enabled mods, logs and server restarts.", BuildServer(), true)),
+            (Require<Button>("ConfigurationNavigation"),
+                new PageDefinition("Configuration", "Configuration", "Configure gameplay, network and map rotation settings.", Scroll(configurationPanel), true)),
+            (Require<Button>("BalanceNavigation"),
+                new PageDefinition("Balance", "Balance", "Edit character, weapon and gameplay balance values.", BuildBalance(), true))
         };
-        var title = new StackPanel { Spacing = 2 };
-        var identity = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
-        identity.Children.Add(new TextBlock { Text = "BRIEFCASE", FontSize = 22, FontWeight = FontWeight.Bold, Foreground = Accent });
-        identity.Children.Add(new TextBlock { Text = "NATIVE  /  SERVER MANAGER", VerticalAlignment = VerticalAlignment.Center, Opacity = .62 });
-        title.Children.Add(identity);
-        title.Children.Add(new TextBlock { Text = "Install, launch and administer your dedicated server", Opacity = .62 });
-        header.Children.Add(title);
-        adminState.VerticalAlignment = VerticalAlignment.Center;
-        adminState.FontWeight = FontWeight.SemiBold;
-        Grid.SetColumn(adminState, 1);
-        header.Children.Add(adminState);
-
-        var pages = new (string Name, Control Content)[]
+        foreach (var (button, page) in pages)
         {
-            ("Home", BuildHome()), ("Administration", BuildConnection()),
-            ("Mods", Scroll(modsPanel)), ("Server", BuildServer()),
-            ("Configuration", Scroll(configurationPanel)), ("Balance", BuildBalance())
-        };
-        var nav = new StackPanel { Spacing = 8, Margin = new Thickness(18, 8, 10, 18) };
-        foreach (var page in pages)
-        {
-            var button = new Button
-            {
-                Content = page.Name, Tag = page.Content, MinHeight = 42,
-                HorizontalContentAlignment = HorizontalAlignment.Left,
-                Padding = new Thickness(16, 8), Background = Brushes.Transparent
-            };
             button.Click += (_, _) => SelectPage(button);
             navigation.Add(button);
-            nav.Children.Add(button);
+            pageDefinitions[button] = page;
         }
-        contentHost.Content = pages[0].Content;
-        navigation[0].Background = new SolidColorBrush(Color.Parse("#3D2452"));
-        var workspace = new Grid
-        {
-            ColumnDefinitions = new ColumnDefinitions("180,*"),
-            Margin = new Thickness(4, 0, 18, 18)
-        };
-        workspace.Children.Add(nav);
-        contentHost.Margin = new Thickness(8);
-        Grid.SetColumn(contentHost, 1);
-        workspace.Children.Add(contentHost);
-        var root = new Grid { RowDefinitions = new RowDefinitions("Auto,Auto,*") };
-        root.Children.Add(header);
-        Grid.SetRow(noticeBorder, 1);
-        noticeBorder.Margin = new Thickness(22, 0, 22, 12);
-        root.Children.Add(noticeBorder);
-        Grid.SetRow(workspace, 2);
-        root.Children.Add(workspace);
-        return root;
+        SelectPage(pages[0].Button);
+        UpdateConnectionUi();
     }
-
     private void SelectPage(Button selected)
     {
+        selectedNavigation = selected;
         foreach (var button in navigation)
-            button.Background = ReferenceEquals(button, selected)
-                ? new SolidColorBrush(Color.Parse("#3D2452")) : Brushes.Transparent;
-        contentHost.Content = selected.Tag;
+        {
+            var active = ReferenceEquals(button, selected);
+            button.Background = active ? AccentSoft : Brushes.Transparent;
+            button.Foreground = active ? Brushes.White : Muted;
+        }
+        var page = pageDefinitions[selected];
+        pageTitle.Text = page.Title;
+        pageSubtitle.Text = page.Subtitle;
+        contentHost.Content = page.RequiresConnection && !administration.Connected
+            ? BuildDisconnectedState() : page.Content;
+    }
+
+    private Control BuildDisconnectedState()
+    {
+        var icon = new Border
+        {
+            Width = 64, Height = 64, CornerRadius = new CornerRadius(20), Background = AccentSoft,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            Child = new FluentIcon
+            {
+                Icon = FluentIconName.Server, IconVariant = IconVariant.Regular, IconSize = IconSize.Size20,
+                Width = 20, Height = 20, Foreground = Accent,
+                HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center
+            }
+        };
+        var content = new StackPanel
+        {
+            Spacing = 12, HorizontalAlignment = HorizontalAlignment.Center,
+            MaxWidth = 520,
+            Children =
+            {
+                icon,
+                new TextBlock
+                {
+                    Text = "No server connected", FontSize = 22, FontWeight = FontWeight.Bold,
+                    HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 5, 0, 0)
+                },
+                new TextBlock
+                {
+                    Text = "Connect to a running Briefcase server to view and manage this section.",
+                    Foreground = Muted, TextAlignment = TextAlignment.Center, TextWrapping = TextWrapping.Wrap
+                },
+                ActionButton("Open administration", Info, () =>
+                {
+                    var target = pageDefinitions.First(x => x.Value.Name == "Administration").Key;
+                    SelectPage(target);
+                    return Task.CompletedTask;
+                }, FluentIconName.PlugConnected)
+            }
+        };
+        return new Grid
+        {
+            Children =
+            {
+                new Border
+                {
+                    Background = Panel, BorderBrush = BorderColor, BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(12), Padding = new Thickness(44),
+                    HorizontalAlignment = HorizontalAlignment.Stretch,
+                    VerticalAlignment = VerticalAlignment.Center, Child = content
+                }
+            }
+        };
+    }
+
+    private void UpdateConnectionUi()
+    {
+        var connected = administration.Connected;
+        adminState.Text = connected ? $"Connected · {administration.Protocol}" : "Not connected";
+        adminState.Foreground = connected ? Success : Muted;
+        connectionDot.Background = connected ? Success : Danger;
+        if (!connected)
+            overview.Text = "No server is connected. Enter the administration identity above, then connect to load its status.";
+        if (refreshAdministrationButton is not null) refreshAdministrationButton.IsEnabled = connected;
+        if (disconnectAdministrationButton is not null) disconnectAdministrationButton.IsEnabled = connected;
+        if (selectedNavigation is not null) SelectPage(selectedNavigation);
     }
 
     private Control BuildHome()
     {
         var body = new StackPanel { Spacing = 14, Margin = new Thickness(12) };
         var install = new StackPanel { Spacing = 10 };
-        install.Children.Add(Heading("Install or update Briefcase"));
+        install.Children.Add(Heading("Install or update Briefcase", FluentIconName.CloudArrowDown));
         install.Children.Add(new TextBlock
         {
             Text = "Select the Deceive Inc. dedicated server folder. The manager downloads the latest official release, verifies its GitHub SHA-256 digest and installs it beside the Shipping executable.",
@@ -171,24 +228,24 @@ public sealed class MainWindow : Window
         });
         install.Children.Add(FormRow("Server directory", targetDirectory));
         var installActions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
-        installActions.Children.Add(ActionButton("Browse", Info, BrowseServerDirectoryAsync));
-        installActions.Children.Add(ActionButton("Install latest release", Success, InstallLatestAsync));
+        installActions.Children.Add(ActionButton("Browse", Info, BrowseServerDirectoryAsync, FluentIconName.FolderOpen));
+        installActions.Children.Add(ActionButton("Install latest release", Success, InstallLatestAsync, FluentIconName.CloudArrowDown));
         install.Children.Add(installActions);
         install.Children.Add(installProgress);
         install.Children.Add(installStage);
         body.Children.Add(Card(install));
         var status = new StackPanel { Spacing = 8 };
-        status.Children.Add(Heading("Installation"));
+        status.Children.Add(Heading("Installation", FluentIconName.Server));
         status.Children.Add(Labelled("Platform directory", installPath));
         status.Children.Add(Labelled("Server process", processState));
         var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
-        actions.Children.Add(ActionButton("Start server", Success, async () => await StartServerAsync()));
-        actions.Children.Add(ActionButton("Refresh", Info, () => { UpdateProcessState(); return Task.CompletedTask; }));
+        actions.Children.Add(ActionButton("Start server", Success, async () => await StartServerAsync(), FluentIconName.ServerPlay));
+        actions.Children.Add(ActionButton("Refresh", Info, () => { UpdateProcessState(); return Task.CompletedTask; }, FluentIconName.ArrowSync));
         status.Children.Add(actions);
         body.Children.Add(Card(status));
 
         var setup = new StackPanel { Spacing = 10 };
-        setup.Children.Add(Heading("Configure administration"));
+        setup.Children.Add(Heading("Configure administration", FluentIconName.Key));
         setup.Children.Add(new TextBlock
         {
             Text = "Generate the server identity and a strong administrator password. Use 127.0.0.1 for local-only access or 0.0.0.0 with a reachable public endpoint for remote access.",
@@ -198,8 +255,8 @@ public sealed class MainWindow : Window
         setup.Children.Add(FormRow("Administration port", port));
         setup.Children.Add(FormRow("Public endpoint", publicEndpoint));
         var setupActions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
-        setupActions.Children.Add(ActionButton("Generate administration password", Success, ConfigureAdministrationAsync));
-        setupActions.Children.Add(ActionButton("Load existing identity", Info, LoadLocalIdentityAsync));
+        setupActions.Children.Add(ActionButton("Generate administration password", Success, ConfigureAdministrationAsync, FluentIconName.Key));
+        setupActions.Children.Add(ActionButton("Load existing identity", Info, LoadLocalIdentityAsync, FluentIconName.FolderOpen));
         setup.Children.Add(setupActions);
         body.Children.Add(Card(setup));
         return Scroll(body);
@@ -241,18 +298,20 @@ public sealed class MainWindow : Window
     {
         var body = new StackPanel { Spacing = 14, Margin = new Thickness(12) };
         var form = new StackPanel { Spacing = 10 };
-        form.Children.Add(Heading("Administration connection"));
+        form.Children.Add(Heading("Administration connection", FluentIconName.PlugConnected));
         form.Children.Add(FormRow("Endpoint", endpoint));
         form.Children.Add(FormRow("Certificate fingerprint", fingerprint));
         form.Children.Add(FormRow("Administrator password", password));
         var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
-        actions.Children.Add(ActionButton("Connect", Success, ConnectAsync));
-        actions.Children.Add(ActionButton("Refresh", Info, RefreshAdministrationAsync));
-        actions.Children.Add(ActionButton("Disconnect", Danger, DisconnectAsync));
+        actions.Children.Add(ActionButton("Connect", Success, ConnectAsync, FluentIconName.PlugConnected));
+        refreshAdministrationButton = ActionButton("Refresh", Info, RefreshAdministrationAsync, FluentIconName.ArrowSync);
+        actions.Children.Add(refreshAdministrationButton);
+        disconnectAdministrationButton = ActionButton("Disconnect", Danger, DisconnectAsync, FluentIconName.PlugDisconnected);
+        actions.Children.Add(disconnectAdministrationButton);
         form.Children.Add(actions);
         body.Children.Add(Card(form));
         var summary = new StackPanel { Spacing = 8 };
-        summary.Children.Add(Heading("Server status"));
+        summary.Children.Add(Heading("Server status", FluentIconName.Info));
         summary.Children.Add(overview);
         body.Children.Add(Card(summary));
         return Scroll(body);
@@ -262,15 +321,15 @@ public sealed class MainWindow : Window
     {
         var body = new StackPanel { Spacing = 14, Margin = new Thickness(12) };
         var selectionCard = new StackPanel { Spacing = 10 };
-        selectionCard.Children.Add(Heading("Enabled mods"));
+        selectionCard.Children.Add(Heading("Enabled mods", FluentIconName.Apps));
         selectionCard.Children.Add(selectionPanel);
-        selectionCard.Children.Add(ActionButton("Save mod selection", Success, SaveSelectionAsync));
+        selectionCard.Children.Add(ActionButton("Save mod selection", Success, SaveSelectionAsync, FluentIconName.Save));
         body.Children.Add(Card(selectionCard));
         var logCard = new StackPanel { Spacing = 10 };
-        logCard.Children.Add(Heading("Logs"));
+        logCard.Children.Add(Heading("Logs", FluentIconName.DocumentText));
         var logActions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
         logActions.Children.Add(logSource);
-        logActions.Children.Add(ActionButton("Refresh logs", Info, LoadLogsAsync));
+        logActions.Children.Add(ActionButton("Refresh logs", Info, LoadLogsAsync, FluentIconName.ArrowSync));
         logCard.Children.Add(logActions);
         logCard.Children.Add(logs);
         body.Children.Add(Card(logCard));
@@ -279,9 +338,9 @@ public sealed class MainWindow : Window
             Spacing = 10,
             Children =
             {
-                Heading("Restart"),
+                Heading("Restart", FluentIconName.Power),
                 new TextBlock { Text = "Restart through Briefcase to apply saved settings and mod updates.", Opacity = .72 },
-                ActionButton("Restart server", Danger, RestartServerAsync)
+                ActionButton("Restart server", Danger, RestartServerAsync, FluentIconName.Power)
             }
         }));
         return Scroll(body);
@@ -296,7 +355,7 @@ public sealed class MainWindow : Window
         top.Children.Add(ActionButton("Reload", Info, async () =>
         {
             if (balanceGroup.SelectedItem is string group) await LoadBalanceAsync(group);
-        }));
+        }, FluentIconName.ArrowSync));
         body.Children.Add(Card(top));
         body.Children.Add(balancePanel);
         return Scroll(body);
@@ -349,7 +408,7 @@ public sealed class MainWindow : Window
         {
             await administration.ConnectAsync(endpoint.Text ?? "", fingerprint.Text ?? "", password.Text ?? "");
             password.Text = "";
-            adminState.Text = $"Connected · {administration.Protocol}";
+            UpdateConnectionUi();
             await RefreshAdministrationCoreAsync();
             Show("Authenticated administration connection established.", "success");
         });
@@ -360,9 +419,9 @@ public sealed class MainWindow : Window
         await GuardAsync(async () =>
         {
             await administration.LogoutAsync();
-            adminState.Text = "Disconnected";
             overview.Text = "";
             ClearAdministrationViews();
+            UpdateConnectionUi();
             Show("Administration disconnected.", "info");
         });
     }
@@ -430,7 +489,7 @@ public sealed class MainWindow : Window
                         await administration.RequestAsync("mod.config.write", payload);
                         await RefreshAdministrationCoreAsync();
                     });
-                }));
+                }, FluentIconName.Save));
             }
             modsPanel.Children.Add(Card(card));
         }
@@ -490,7 +549,7 @@ public sealed class MainWindow : Window
                 await LoadConfigurationAsync();
                 Show("Server configuration saved. Restart to apply it.", "success");
             });
-        }));
+        }, FluentIconName.Save));
     }
 
     private async Task LoadLogsAsync()
@@ -511,8 +570,9 @@ public sealed class MainWindow : Window
         await GuardAsync(async () =>
         {
             await administration.RequestAsync("server.restart");
-            await administration.DisposeAsync();
-            adminState.Text = "Restarting";
+            await administration.LogoutAsync();
+            ClearAdministrationViews();
+            UpdateConnectionUi();
             Show("Server restart requested. Reconnect after startup completes.", "warning");
         });
     }
@@ -567,7 +627,7 @@ public sealed class MainWindow : Window
                     await LoadBalanceAsync(group);
                     Show("Balance changes saved. Restart to apply them.", "success");
                 });
-            });
+            }, FluentIconName.Save);
             balancePanel.Children.Add(save);
         });
     }
@@ -600,14 +660,39 @@ public sealed class MainWindow : Window
         if (busy) return;
         busy = true;
         try { await operation(); }
-        catch (AdminProtocolException error) { Show($"{error.Message} ({error.Code})", "danger"); }
-        catch (Exception error) { Show(error.Message, "danger"); }
+        catch (AdminProtocolException error)
+        {
+            if (!administration.Connected)
+            {
+                ClearAdministrationViews();
+                UpdateConnectionUi();
+            }
+            Show($"{error.Message} ({error.Code})", "danger");
+        }
+        catch (Exception error)
+        {
+            if (error is IOException or EndOfStreamException or System.Net.Sockets.SocketException)
+                await administration.LogoutAsync();
+            if (!administration.Connected)
+            {
+                ClearAdministrationViews();
+                UpdateConnectionUi();
+            }
+            Show(error.Message, "danger");
+        }
         finally { busy = false; }
     }
 
     private void Show(string message, string kind)
     {
         notice.Text = message;
+        noticeIcon.Icon = kind switch
+        {
+            "success" => FluentIconName.CheckmarkCircle,
+            "danger" => FluentIconName.DismissCircle,
+            "warning" => FluentIconName.Warning,
+            _ => FluentIconName.Info
+        };
         noticeBorder.Background = kind switch
         {
             "success" => new SolidColorBrush(Color.Parse("#193B2F")),
@@ -620,11 +705,25 @@ public sealed class MainWindow : Window
 
     private static string FormatUptime(long seconds) => TimeSpan.FromSeconds(Math.Max(0, seconds)).ToString("d'.'hh':'mm':'ss", CultureInfo.InvariantCulture);
     private static ScrollViewer Scroll(Control content) => new() { Content = content, VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto };
-    private static TextBlock Heading(string text) => new() { Text = text, FontSize = 18, FontWeight = FontWeight.Bold };
+    private static Control Heading(string text, FluentIconName icon)
+    {
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 9 };
+        row.Children.Add(new FluentIcon
+        {
+            Icon = icon, IconSize = IconSize.Size20, Foreground = Accent,
+            VerticalAlignment = VerticalAlignment.Center
+        });
+        row.Children.Add(new TextBlock
+        {
+            Text = text, FontSize = 18, FontWeight = FontWeight.Bold,
+            VerticalAlignment = VerticalAlignment.Center
+        });
+        return row;
+    }
     private static Border Card(Control content) => new()
     {
         Background = Panel, BorderBrush = BorderColor, BorderThickness = new Thickness(1),
-        CornerRadius = new CornerRadius(8), Padding = new Thickness(16), Child = content
+        CornerRadius = new CornerRadius(12), Padding = new Thickness(20), Child = content
     };
     private static Control Labelled(string label, Control value)
     {
@@ -638,14 +737,29 @@ public sealed class MainWindow : Window
         row.Children.Add(new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center, FontWeight = FontWeight.SemiBold });
         Grid.SetColumn(input, 1); row.Children.Add(input); return row;
     }
-    private static Button ActionButton(string text, IBrush color, Func<Task> action)
+    private static Button ActionButton(string text, IBrush color, Func<Task> action, FluentIconName icon)
     {
+        var content = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        content.Children.Add(new FluentIcon
+        {
+            Icon = icon, IconSize = IconSize.Size20,
+            VerticalAlignment = VerticalAlignment.Center
+        });
+        content.Children.Add(new TextBlock { Text = text, VerticalAlignment = VerticalAlignment.Center });
         var button = new Button
         {
-            Content = text, Background = color, Foreground = Brushes.White, MinHeight = 36,
-            Padding = new Thickness(16, 7), HorizontalContentAlignment = HorizontalAlignment.Center
+            Content = content, Background = color, Foreground = Brushes.White, MinHeight = 38,
+            Padding = new Thickness(15, 8), HorizontalContentAlignment = HorizontalAlignment.Center
         };
         button.Click += async (_, _) => await action();
         return button;
     }
+
+    private T Require<T>(string name) where T : Control =>
+        this.FindControl<T>(name) ?? throw new InvalidOperationException($"Missing XAML control '{name}'.");
+
+    private static SolidColorBrush Brush(string color) => new(Color.Parse(color));
+
+    private sealed record PageDefinition(string Name, string Title, string Subtitle, Control Content,
+        bool RequiresConnection);
 }

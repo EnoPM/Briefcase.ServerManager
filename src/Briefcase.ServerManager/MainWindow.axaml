@@ -1,0 +1,108 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:icons="using:FluentIcons.Avalonia"
+        x:Class="Briefcase.ServerManager.MainWindow"
+        Title="Briefcase Server Manager"
+        Icon="/Assets/Briefcase.png"
+        Width="1240" Height="820" MinWidth="920" MinHeight="640"
+        Background="{DynamicResource WindowBrush}">
+  <Grid ColumnDefinitions="230,*">
+    <Border Grid.Column="0"
+            Background="{DynamicResource SidebarBrush}"
+            BorderBrush="{DynamicResource BorderBrush}"
+            BorderThickness="0,0,1,0">
+      <Grid RowDefinitions="Auto,*,Auto">
+        <StackPanel Margin="24,24,20,30" Spacing="1">
+          <StackPanel Orientation="Horizontal" Spacing="9">
+            <Image Source="/Assets/Briefcase.png" Width="32" Height="32"
+                   Stretch="Uniform" RenderOptions.BitmapInterpolationMode="HighQuality" />
+            <TextBlock Text="BRIEFCASE" FontSize="20" FontWeight="Bold"
+                       Foreground="{DynamicResource AccentBrush}"
+                       VerticalAlignment="Center" />
+          </StackPanel>
+          <TextBlock Text="SERVER MANAGER" FontSize="11" FontWeight="SemiBold"
+                     Foreground="{DynamicResource MutedTextBrush}"
+                     Margin="41,1,0,0" />
+        </StackPanel>
+
+        <StackPanel Grid.Row="1" Margin="14,0,14,18" Spacing="5">
+          <TextBlock Text="GENERAL" FontSize="10" FontWeight="Bold"
+                     Foreground="{DynamicResource MutedTextBrush}"
+                     Margin="10,0,10,7" />
+          <Button x:Name="HomeNavigation" Classes="navigation">
+            <StackPanel Orientation="Horizontal" Spacing="12">
+              <icons:FluentIcon Icon="Home" IconSize="Size20" />
+              <TextBlock Text="Home" VerticalAlignment="Center" />
+            </StackPanel>
+          </Button>
+          <Button x:Name="AdministrationNavigation" Classes="navigation">
+            <StackPanel Orientation="Horizontal" Spacing="12">
+              <icons:FluentIcon Icon="PlugConnected" IconSize="Size20" />
+              <TextBlock Text="Administration" VerticalAlignment="Center" />
+            </StackPanel>
+          </Button>
+
+          <TextBlock Text="CONNECTED SERVER" FontSize="10" FontWeight="Bold"
+                     Foreground="{DynamicResource MutedTextBrush}"
+                     Margin="10,22,10,7" />
+          <Button x:Name="ModsNavigation" Classes="navigation">
+            <StackPanel Orientation="Horizontal" Spacing="12">
+              <icons:FluentIcon Icon="Apps" IconSize="Size20" />
+              <TextBlock Text="Mods" VerticalAlignment="Center" />
+            </StackPanel>
+          </Button>
+          <Button x:Name="ServerNavigation" Classes="navigation">
+            <StackPanel Orientation="Horizontal" Spacing="12">
+              <icons:FluentIcon Icon="Server" IconSize="Size20" />
+              <TextBlock Text="Server" VerticalAlignment="Center" />
+            </StackPanel>
+          </Button>
+          <Button x:Name="ConfigurationNavigation" Classes="navigation">
+            <StackPanel Orientation="Horizontal" Spacing="12">
+              <icons:FluentIcon Icon="Settings" IconSize="Size20" />
+              <TextBlock Text="Configuration" VerticalAlignment="Center" />
+            </StackPanel>
+          </Button>
+          <Button x:Name="BalanceNavigation" Classes="navigation">
+            <StackPanel Orientation="Horizontal" Spacing="12">
+              <icons:FluentIcon Icon="Scales" IconSize="Size20" />
+              <TextBlock Text="Balance" VerticalAlignment="Center" />
+            </StackPanel>
+          </Button>
+        </StackPanel>
+
+        <Border x:Name="ConnectionBadge" Grid.Row="2" Margin="14,12,14,20"
+                Padding="12,9" CornerRadius="9"
+                Background="{DynamicResource RaisedSurfaceBrush}"
+                BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1">
+          <StackPanel Orientation="Horizontal" Spacing="9">
+            <Border x:Name="ConnectionDot" Width="8" Height="8" CornerRadius="4"
+                    VerticalAlignment="Center" />
+            <TextBlock x:Name="AdminState" Text="Not connected" FontWeight="SemiBold"
+                       VerticalAlignment="Center" />
+          </StackPanel>
+        </Border>
+      </Grid>
+    </Border>
+
+    <Grid Grid.Column="1" RowDefinitions="Auto,Auto,*">
+      <StackPanel Margin="30,24,30,18" Spacing="4">
+        <TextBlock x:Name="PageTitle" FontSize="28" FontWeight="Bold" />
+        <TextBlock x:Name="PageSubtitle" Foreground="{DynamicResource MutedTextBrush}"
+                   TextWrapping="Wrap" />
+      </StackPanel>
+
+      <Border x:Name="NoticeBorder" Grid.Row="1" IsVisible="False"
+              Margin="30,0,30,16" Padding="13,11" CornerRadius="8">
+        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
+          <icons:FluentIcon x:Name="NoticeIcon" Icon="Info" IconSize="Size20"
+                            VerticalAlignment="Center" />
+          <TextBlock x:Name="NoticeText" Grid.Column="1" TextWrapping="Wrap"
+                     VerticalAlignment="Center" />
+        </Grid>
+      </Border>
+
+      <ContentControl x:Name="ContentHost" Grid.Row="2" Margin="30,0,30,24" />
+    </Grid>
+  </Grid>
+</Window>

@@ -13,6 +13,7 @@
     <AssemblyName>Briefcase.ServerManager</AssemblyName>
     <RootNamespace>Briefcase.ServerManager.Bootstrap</RootNamespace>
     <Version>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)..\..\VERSION').Trim())</Version>
+    <ApplicationIcon>..\Briefcase.ServerManager\Assets\Briefcase.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup Condition="'$(PayloadDirectory)' != ''">
     <EmbeddedResource Include="$(PayloadDirectory)\*" LogicalName="payload/%(Filename)%(Extension)" />
