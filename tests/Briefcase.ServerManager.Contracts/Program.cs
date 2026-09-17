@@ -30,6 +30,103 @@ Check(AdminConnection.NormalizeFingerprint(string.Join(':', Enumerable.Repeat("A
     "Fingerprint normalization");
 Reject(() => AdminConnection.NormalizeFingerprint("abcd"), "Short fingerprint accepted");
 
+JsonObject BalanceValue(string table, string row, string field, double saved) => new()
+{
+    ["id"] = $"{table}/{row}/{field}",
+    ["table"] = table,
+    ["row"] = row,
+    ["field"] = field,
+    ["saved"] = saved,
+    ["active"] = saved,
+    ["default"] = saved,
+    ["editable"] = true,
+    ["allowedRange"] = "0 to 100",
+    ["presentation"] = new JsonObject { ["displayName"] = field + " label" },
+    ["rowPresentation"] = new JsonObject { ["displayName"] = row + " label" }
+};
+
+var yumiCatalog = BalanceCatalogBuilder.Build(new JsonObject
+{
+    ["group"] = "Yumi",
+    ["groupLabels"] = new JsonObject
+    {
+        ["Yumi"] = new JsonObject { ["displayName"] = "Yumi" }
+    },
+    ["entries"] = new JsonArray
+    {
+        BalanceValue("DT_Yumi_ActivesBalancing", "Yumi_Passive_Mod2", "Duration", 12.5),
+        BalanceValue("DT_Balancing_Projectiles", "Yumi_ActiveProjectile", "Speed", 950),
+        BalanceValue("DT_Balancing_Projectiles", "Yumi_Weapon_Mod2_Regular", "Gravity", 0.2),
+        BalanceValue("DT_Projectiles_Balancing", "Yumi_Weapon_Mod2_Split", "Damage", 15)
+    }
+});
+var yumiPassive = yumiCatalog.Entries.Single(x => x.Row == "Yumi_Passive_Mod2");
+Check(yumiPassive.Path.Category == BalanceCategory.Passives && yumiPassive.Path.Variant == 3,
+    "Yumi passive table exception classification");
+var yumiActive = yumiCatalog.Entries.Single(x => x.Row == "Yumi_ActiveProjectile");
+Check(yumiActive.Path.Category == BalanceCategory.Expertises && yumiActive.Path.Variant == 1,
+    "Yumi active projectile classification");
+Check(yumiCatalog.Entries.Count(x => x.Row.Contains("Yumi_Weapon_Mod2", StringComparison.Ordinal)) == 2 &&
+      yumiCatalog.Slices.Any(x => x.Category == BalanceCategory.Weapons && x.Variant == 3),
+    "Yumi regular and split weapon grouping");
+Check(!yumiCatalog.Slices.Any(x => x.Category == BalanceCategory.Passives && x.Variant is 1 or 2),
+    "Empty character variants remain hidden");
+Check(yumiCatalog.Schema.OptionCount == yumiCatalog.Entries.Count &&
+      yumiCatalog.Schema.Categories.Single(x => x.Category == BalanceCategory.Weapons)
+          .Variants.Single(x => x.Number == 3).Components.Count == 2,
+    "Generated C# balancing hierarchy");
+Check(yumiCatalog.Entries.All(x => x.Constraint.Minimum == 0 && x.Constraint.Maximum == 100) &&
+      yumiCatalog.Entries.Single(x => x.Field == "Gravity").Constraint.Increment == .01m,
+    "Server ranges become typed numeric constraints");
+Check(yumiCatalog.Select(null, "950").Single().Field == "Speed" &&
+      yumiCatalog.Select(null, "Gravity label").Single().Field == "Gravity",
+    "Balance search includes values and labels");
+
+var exceptionCatalog = BalanceCatalogBuilder.Build(new JsonObject
+{
+    ["group"] = "Vigil",
+    ["entries"] = new JsonArray
+    {
+        BalanceValue("DT_Vigil_PassivesBalancing", "Vigil_Passive_ThrowableDevice", "Range", 8),
+        BalanceValue("DT_Balancing_HitscanWeapons", "Vigil_Weapon_ADS_Mod1", "Damage", 20)
+    }
+});
+Check(exceptionCatalog.Entries.Single(x => x.Row.Contains("Throwable", StringComparison.Ordinal)).Path.Variant == 0,
+    "Unnumbered Vigil passive fallback");
+var vigilAds = exceptionCatalog.Entries.Single(x => x.Row.Contains("ADS", StringComparison.Ordinal));
+Check(vigilAds.Path.Category == BalanceCategory.Weapons && vigilAds.Path.Variant == 2 &&
+      vigilAds.Path.Component == "ads" && vigilAds.ComponentLabel == "ADS",
+    "ADS weapon component identity and code-defined label");
+
+var larcinCatalog = BalanceCatalogBuilder.Build(new JsonObject
+{
+    ["group"] = "Larcin",
+    ["entries"] = new JsonArray
+    {
+        BalanceValue("DT_Larcin_ActivesBalancing", "Larcin_Active_Prototype", "Cooldown", 30)
+    }
+});
+var prototype = larcinCatalog.Entries.Single();
+Check(prototype.Path.Category == BalanceCategory.Expertises && prototype.Path.Variant == 0 &&
+      larcinCatalog.Slices.Single().Label == "Additional data", "Larcin prototype fallback grouping");
+
+var gameCatalog = BalanceCatalogBuilder.Build(new JsonObject
+{
+    ["group"] = "Commun",
+    ["entries"] = new JsonArray
+    {
+        BalanceValue("DT_CommonBalancing", "Movement", "WalkSpeed", 400),
+        BalanceValue("DT_CommonBalancing", "Movement", "SprintSpeed", 650)
+    }
+});
+Check(gameCatalog.Root == BalanceRoot.Game &&
+      gameCatalog.Entries.All(x => x.Path.Category == BalanceCategory.Shared) &&
+      gameCatalog.Slices.Single().Count == 2, "Shared game balancing grouping");
+var constrained = gameCatalog.Entries[0];
+Check(constrained.Constraint.TryValidate(JsonValue.Create(50), constrained.ValueType, out _) &&
+      !constrained.Constraint.TryValidate(JsonValue.Create(101), constrained.ValueType, out _),
+    "Balance constraints reject out-of-range values");
+
 using (var echo = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0)))
 {
     var echoPort = ((IPEndPoint)echo.Client.LocalEndPoint!).Port;

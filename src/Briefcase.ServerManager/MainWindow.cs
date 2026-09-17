@@ -67,9 +67,19 @@ public sealed partial class MainWindow : Window
     private readonly StackPanel selectionPanel = new() { Spacing = 8 };
     private readonly StackPanel configurationPanel = new() { Spacing = 12 };
     private readonly StackPanel balancePanel = new() { Spacing = 12 };
+    private readonly StackPanel balanceNavigationPanel = new() { Spacing = 4 };
+    private readonly TextBox balanceSearch = new()
+    {
+        PlaceholderText = "Search by label, key, table, row or value…",
+        MinHeight = 38
+    };
+    private readonly TextBlock balanceContentTitle = new() { FontSize = 20, FontWeight = FontWeight.Bold };
+    private readonly TextBlock balanceContentSubtitle = new()
+    {
+        Foreground = Muted, TextWrapping = TextWrapping.Wrap
+    };
     private readonly TextBox logs = new() { IsReadOnly = true, AcceptsReturn = true, TextWrapping = TextWrapping.NoWrap, MinHeight = 480 };
     private readonly ComboBox logSource = new() { ItemsSource = new[] { "framework", "game" }, SelectedIndex = 0, MinWidth = 180 };
-    private readonly ComboBox balanceGroup = new() { MinWidth = 220 };
     private readonly DispatcherTimer processTimer;
     private readonly DispatcherTimer serverSummaryTimer;
     private Button? selectedNavigation;
@@ -78,6 +88,14 @@ public sealed partial class MainWindow : Window
     private JsonArray mods = [];
     private JsonObject? selection;
     private JsonObject? balance;
+    private readonly Dictionary<string, string> balanceGroupLabels = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, JsonNode?> balanceDraft = new(StringComparer.Ordinal);
+    private readonly List<BalanceEditorBinding> balanceControls = [];
+    private string[] balanceGroups = [];
+    private string? selectedBalanceGroup;
+    private BalanceCatalog? balanceCatalog;
+    private BalanceSlice? selectedBalanceSlice;
+    private Button? balanceSaveButton;
     private bool busy;
     private bool serverSummaryBusy;
     private bool reconnectBusy;
@@ -152,11 +170,6 @@ public sealed partial class MainWindow : Window
             processTimer.Stop();
             serverSummaryTimer.Stop();
             administration.DisposeAsync().AsTask().GetAwaiter().GetResult();
-        };
-        balanceGroup.SelectionChanged += async (_, _) =>
-        {
-            if (!busy && administration.Connected && balanceGroup.SelectedItem is string group)
-                await LoadBalanceAsync(group);
         };
     }
 
@@ -410,17 +423,54 @@ public sealed partial class MainWindow : Window
 
     private Control BuildBalance()
     {
-        var body = new StackPanel { Spacing = 12, Margin = new Thickness(12) };
-        var top = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
-        top.Children.Add(new TextBlock { Text = "Character or group", VerticalAlignment = VerticalAlignment.Center, FontWeight = FontWeight.Bold });
-        top.Children.Add(balanceGroup);
-        top.Children.Add(ActionButton("Reload", Info, async () =>
+        var root = new Grid
         {
-            if (balanceGroup.SelectedItem is string group) await LoadBalanceAsync(group);
-        }, FluentIconName.ArrowSync));
-        body.Children.Add(Card(top));
-        body.Children.Add(balancePanel);
-        return Scroll(body);
+            RowDefinitions = new RowDefinitions("Auto,*"),
+            RowSpacing = 12,
+            Margin = new Thickness(12)
+        };
+
+        var toolbar = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 10 };
+        toolbar.Children.Add(balanceSearch);
+        var reload = ActionButton("Reload", Info, async () =>
+        {
+            if (selectedBalanceGroup is not null) await LoadBalanceAsync(selectedBalanceGroup);
+        }, FluentIconName.ArrowSync);
+        Grid.SetColumn(reload, 1);
+        toolbar.Children.Add(reload);
+        root.Children.Add(Card(toolbar));
+
+        var columns = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("270,*"),
+            ColumnSpacing = 14
+        };
+        Grid.SetRow(columns, 1);
+        var navigationCard = Card(Scroll(balanceNavigationPanel));
+        navigationCard.Padding = new Thickness(10);
+        columns.Children.Add(navigationCard);
+
+        var content = new StackPanel { Spacing = 8, Margin = new Thickness(2, 0, 0, 0) };
+        content.Children.Add(balanceContentTitle);
+        content.Children.Add(balanceContentSubtitle);
+        content.Children.Add(balancePanel);
+        balanceSaveButton = ActionButton("Save balance changes", Success, SaveBalanceAsync, FluentIconName.Save);
+        balanceSaveButton.HorizontalAlignment = HorizontalAlignment.Left;
+        balanceSaveButton.IsVisible = false;
+        content.Children.Add(balanceSaveButton);
+        var contentScroll = Scroll(content);
+        Grid.SetColumn(contentScroll, 1);
+        columns.Children.Add(contentScroll);
+        root.Children.Add(columns);
+
+        balanceSearch.TextChanged += (_, _) =>
+        {
+            CaptureBalanceDraft();
+            RenderBalanceContent();
+        };
+        RenderBalanceNavigation();
+        RenderBalanceContent();
+        return root;
     }
 
     private async Task StartServerAsync()
@@ -511,11 +561,12 @@ public sealed partial class MainWindow : Window
             await LoadSelectionAsync();
             await LoadConfigurationAsync();
             var first = (await administration.RequestAsync("balance.read")).AsObject();
-            balance = first;
-            var groups = first["groups"]?.AsObject().Select(x => x.Key).ToArray() ?? [];
-            balanceGroup.ItemsSource = groups;
-            if (groups.Length > 0)
-                balanceGroup.SelectedIndex = 0;
+            ApplyBalanceIndex(first);
+            var group = selectedBalanceGroup is not null && balanceGroups.Contains(selectedBalanceGroup, StringComparer.Ordinal)
+                ? selectedBalanceGroup
+                : BalanceCatalogBuilder.Characters.FirstOrDefault(x => balanceGroups.Contains(x, StringComparer.Ordinal))
+                  ?? balanceGroups.FirstOrDefault();
+            if (group is not null) await LoadBalanceCoreAsync(group);
         }
         Show("Server data refreshed.", "success");
     }
@@ -751,59 +802,364 @@ public sealed partial class MainWindow : Window
         });
     }
 
-    private async Task LoadBalanceAsync(string group)
+    private async Task LoadBalanceAsync(string group) =>
+        await GuardAsync(() => LoadBalanceCoreAsync(group));
+
+    private async Task LoadBalanceCoreAsync(string group)
+    {
+        var preferredSlice = string.Equals(selectedBalanceGroup, group, StringComparison.Ordinal)
+            ? selectedBalanceSlice?.Key
+            : null;
+        var response = (await administration.RequestAsync("balance.read",
+            new JsonObject { ["group"] = group })).AsObject();
+        ApplyBalanceResponse(response, preferredSlice);
+    }
+
+    private void ApplyBalanceIndex(JsonObject response)
+    {
+        balanceGroups = response["groups"]?.AsObject().Select(x => x.Key).ToArray() ?? [];
+        balanceGroupLabels.Clear();
+        if (response["groupLabels"] is JsonObject labels)
+            foreach (var (key, value) in labels)
+                balanceGroupLabels[key] = BalanceSchemaCustomization.Default.GroupLabel(key,
+                    value?["displayName"]?.GetValue<string>() ?? key);
+        RenderBalanceNavigation();
+    }
+
+    private void ApplyBalanceResponse(JsonObject response, string? preferredSlice = null)
+    {
+        balance = response;
+        balanceCatalog = BalanceCatalogBuilder.Build(response);
+        selectedBalanceGroup = balanceCatalog.Group;
+        balanceDraft.Clear();
+        foreach (var entry in balanceCatalog.Entries)
+            balanceDraft[entry.Id] = entry.Saved?.DeepClone();
+        selectedBalanceSlice = balanceCatalog.Slices.FirstOrDefault(x => x.Key == preferredSlice)
+                               ?? balanceCatalog.Slices.FirstOrDefault();
+        RenderBalanceNavigation();
+        RenderBalanceContent();
+    }
+
+    private void RenderBalanceNavigation()
+    {
+        balanceNavigationPanel.Children.Clear();
+        AddBalanceNavigationHeading("CHARACTERS");
+        foreach (var group in BalanceCatalogBuilder.Characters.Where(x => balanceGroups.Contains(x, StringComparer.Ordinal)))
+        {
+            balanceNavigationPanel.Children.Add(BalanceNavigationButton(
+                BalanceGroupLabel(group), null, string.Equals(group, selectedBalanceGroup, StringComparison.Ordinal),
+                new Thickness(0), async () => await LoadBalanceAsync(group)));
+            if (string.Equals(group, selectedBalanceGroup, StringComparison.Ordinal) &&
+                balanceCatalog?.Root == BalanceRoot.Characters)
+                AddCharacterBalanceSlices();
+        }
+
+        AddBalanceNavigationHeading("GAME", new Thickness(8, 18, 8, 5));
+        foreach (var group in balanceGroups.Where(x => !BalanceCatalogBuilder.Characters.Contains(x, StringComparer.Ordinal)))
+        {
+            balanceNavigationPanel.Children.Add(BalanceNavigationButton(
+                BalanceGroupLabel(group), null, string.Equals(group, selectedBalanceGroup, StringComparison.Ordinal),
+                new Thickness(0), async () => await LoadBalanceAsync(group)));
+            if (string.Equals(group, selectedBalanceGroup, StringComparison.Ordinal) &&
+                balanceCatalog?.Root == BalanceRoot.Game)
+                foreach (var slice in balanceCatalog.Slices)
+                    balanceNavigationPanel.Children.Add(BalanceNavigationButton(
+                        slice.Label, slice.Count, slice.Key == selectedBalanceSlice?.Key,
+                        new Thickness(16, 0, 0, 0), () => SelectBalanceSliceAsync(slice)));
+        }
+    }
+
+    private void AddCharacterBalanceSlices()
+    {
+        if (balanceCatalog is null) return;
+        foreach (var category in new[] { BalanceCategory.Weapons, BalanceCategory.Passives, BalanceCategory.Expertises })
+        {
+            var slices = balanceCatalog.Slices.Where(x => x.Category == category).ToArray();
+            if (slices.Length == 0) continue;
+            balanceNavigationPanel.Children.Add(new TextBlock
+            {
+                Text = BalanceCatalogBuilder.CategoryLabel(category).ToUpperInvariant(),
+                FontSize = 10,
+                FontWeight = FontWeight.Bold,
+                Foreground = Muted,
+                Margin = new Thickness(16, 9, 8, 3)
+            });
+            foreach (var slice in slices)
+                balanceNavigationPanel.Children.Add(BalanceNavigationButton(
+                    slice.Label, slice.Count, slice.Key == selectedBalanceSlice?.Key,
+                    new Thickness(24, 0, 0, 0), () => SelectBalanceSliceAsync(slice)));
+        }
+    }
+
+    private Task SelectBalanceSliceAsync(BalanceSlice slice)
+    {
+        CaptureBalanceDraft();
+        selectedBalanceSlice = slice;
+        RenderBalanceNavigation();
+        RenderBalanceContent();
+        return Task.CompletedTask;
+    }
+
+    private Button BalanceNavigationButton(string label, int? count, bool selected,
+        Thickness margin, Func<Task> action)
+    {
+        var content = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 8 };
+        content.Children.Add(new TextBlock
+        {
+            Text = label,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            VerticalAlignment = VerticalAlignment.Center
+        });
+        if (count is not null)
+        {
+            var countText = new TextBlock
+            {
+                Text = count.Value.ToString(CultureInfo.InvariantCulture),
+                FontSize = 11,
+                Foreground = Muted,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            Grid.SetColumn(countText, 1);
+            content.Children.Add(countText);
+        }
+        var button = new Button
+        {
+            Content = content,
+            Margin = margin,
+            Background = selected ? AccentSoft : Brushes.Transparent,
+            Foreground = selected ? Brushes.White : Muted
+        };
+        button.Classes.Add("balance-navigation");
+        button.Click += async (_, _) => await action();
+        return button;
+    }
+
+    private void AddBalanceNavigationHeading(string text, Thickness? margin = null) =>
+        balanceNavigationPanel.Children.Add(new TextBlock
+        {
+            Text = text,
+            FontSize = 10,
+            FontWeight = FontWeight.Bold,
+            Foreground = Muted,
+            Margin = margin ?? new Thickness(8, 4, 8, 5)
+        });
+
+    private string BalanceGroupLabel(string group) => BalanceSchemaCustomization.Default.GroupLabel(group,
+        balanceGroupLabels.TryGetValue(group, out var label) ? label : group);
+
+    private void RenderBalanceContent()
+    {
+        balancePanel.Children.Clear();
+        balanceControls.Clear();
+        if (balanceSaveButton is not null) balanceSaveButton.IsVisible = balanceCatalog is not null;
+        if (balanceCatalog is null)
+        {
+            balanceContentTitle.Text = "Select balancing data";
+            balanceContentSubtitle.Text = "Connect to a server and choose a character or game category.";
+            balancePanel.Children.Add(Card(new TextBlock
+            {
+                Text = "No balancing data is loaded.",
+                Foreground = Muted
+            }));
+            return;
+        }
+
+        var query = balanceSearch.Text?.Trim() ?? "";
+        var entries = balanceCatalog.Select(selectedBalanceSlice, query).ToArray();
+        if (query.Length > 0)
+        {
+            balanceContentTitle.Text = $"{entries.Length} search result{(entries.Length == 1 ? "" : "s")}";
+            balanceContentSubtitle.Text = $"Searching every value in {balanceCatalog.GroupLabel}. Clear the search field to return to the selected category.";
+        }
+        else
+        {
+            balanceContentTitle.Text = selectedBalanceSlice?.Label ?? balanceCatalog.GroupLabel;
+            balanceContentSubtitle.Text = BalanceBreadcrumb(balanceCatalog, selectedBalanceSlice);
+        }
+
+        if (entries.Length == 0)
+        {
+            balancePanel.Children.Add(Card(new TextBlock
+            {
+                Text = query.Length > 0 ? "No balancing value matches this search." : "This category has no balancing values.",
+                Foreground = Muted
+            }));
+            return;
+        }
+
+        foreach (var component in entries.GroupBy(x => new
+                 {
+                     x.Path.Category, x.Path.Variant, x.Path.Component, x.ComponentLabel, x.Row, x.RowLabel
+                 }))
+        {
+            var card = new StackPanel { Spacing = 12 };
+            card.Children.Add(new TextBlock
+            {
+                Text = component.Key.ComponentLabel,
+                FontSize = 17,
+                FontWeight = FontWeight.Bold
+            });
+            card.Children.Add(new TextBlock
+            {
+                Text = query.Length > 0
+                    ? $"{BalanceCatalogBuilder.CategoryLabel(component.Key.Category)} · {BalanceCatalogBuilder.VariantLabel(balanceCatalog.Group, component.Key.Category, component.Key.Variant)} · {component.Key.RowLabel}"
+                    : component.Key.RowLabel,
+                Foreground = Muted,
+                FontSize = 12,
+                TextWrapping = TextWrapping.Wrap
+            });
+            foreach (var entry in component) card.Children.Add(BuildBalanceEditor(entry));
+            balancePanel.Children.Add(Card(card));
+        }
+    }
+
+    private Control BuildBalanceEditor(BalanceEntry entry)
+    {
+        var value = balanceDraft.GetValueOrDefault(entry.Id) ?? entry.Saved;
+        Control editor;
+        if (entry.ValueType == BalanceValueType.Boolean)
+        {
+            var checkedValue = value is JsonValue json && json.TryGetValue<bool>(out var result) && result;
+            editor = new CheckBox
+            {
+                IsChecked = checkedValue,
+                MinHeight = 32,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+        }
+        else if (entry.ValueType == BalanceValueType.Number && entry.Constraint.AllowedValues.Count > 0)
+        {
+            var allowed = entry.Constraint.AllowedValues;
+            editor = new ComboBox
+            {
+                ItemsSource = allowed,
+                SelectedItem = ToDecimal(value),
+                MinHeight = 38,
+                HorizontalAlignment = HorizontalAlignment.Stretch
+            };
+        }
+        else if (entry.ValueType == BalanceValueType.Number)
+        {
+            var numeric = new NumericUpDown
+            {
+                Value = ToDecimal(value),
+                Increment = entry.Constraint.Increment,
+                FormatString = "0.###############",
+                MinHeight = 38,
+                HorizontalAlignment = HorizontalAlignment.Stretch
+            };
+            if (entry.Constraint.Minimum is not null) numeric.Minimum = entry.Constraint.Minimum.Value;
+            if (entry.Constraint.Maximum is not null) numeric.Maximum = entry.Constraint.Maximum.Value;
+            editor = numeric;
+        }
+        else
+            editor = new TextBox
+            {
+                Text = value?.ToJsonString() ?? "",
+                IsReadOnly = true,
+                MinHeight = 38
+            };
+        editor.IsEnabled = entry.Editable;
+        ToolTip.SetTip(editor, $"{entry.Table} / {entry.Row} / {entry.Field}" +
+                               ConstraintDescription(entry));
+        if (entry.ValueType != BalanceValueType.Unsupported)
+            balanceControls.Add(new BalanceEditorBinding(entry.Id, editor));
+
+        var labels = new StackPanel { Spacing = 2, VerticalAlignment = VerticalAlignment.Center };
+        labels.Children.Add(new TextBlock
+        {
+            Text = entry.Label,
+            FontWeight = FontWeight.SemiBold,
+            TextWrapping = TextWrapping.Wrap
+        });
+        labels.Children.Add(new TextBlock
+        {
+            Text = entry.Field,
+            Foreground = Muted,
+            FontSize = 11,
+            TextWrapping = TextWrapping.Wrap
+        });
+        var row = new Grid { ColumnDefinitions = new ColumnDefinitions("*,230"), ColumnSpacing = 18 };
+        row.Children.Add(labels);
+        Grid.SetColumn(editor, 1);
+        row.Children.Add(editor);
+        return row;
+    }
+
+    private void CaptureBalanceDraft()
+    {
+        foreach (var binding in balanceControls.Where(x => x.Control.IsEnabled))
+            balanceDraft[binding.Id] = binding.Control switch
+            {
+                CheckBox checkBox => JsonValue.Create(checkBox.IsChecked == true),
+                NumericUpDown numeric => JsonValue.Create((double)(numeric.Value ?? 0)),
+                ComboBox { SelectedItem: decimal selected } => JsonValue.Create((double)selected),
+                _ => balanceDraft.GetValueOrDefault(binding.Id)
+            };
+        balanceControls.Clear();
+    }
+
+    private async Task SaveBalanceAsync()
     {
         await GuardAsync(async () =>
         {
-            balance = (await administration.RequestAsync("balance.read", new JsonObject { ["group"] = group })).AsObject();
-            balancePanel.Children.Clear();
-            var controls = new List<(string Id, JsonNode? Original, Control Control, bool Boolean)>();
-            foreach (var node in balance["entries"]?.AsArray() ?? [])
+            if (balance is null || balanceCatalog is null) return;
+            CaptureBalanceDraft();
+            var changes = new JsonArray();
+            foreach (var entry in balanceCatalog.Entries.Where(x => x.Editable))
             {
-                if (node is not JsonObject entry) continue;
-                var label = entry["presentation"]?["displayName"]?.GetValue<string>() ?? entry["field"]?.GetValue<string>() ?? "Setting";
-                var rowName = entry["rowPresentation"]?["displayName"]?.GetValue<string>() ?? entry["row"]?.GetValue<string>() ?? "";
-                var original = entry["saved"]?.DeepClone();
-                Control control;
-                var boolean = false;
-                var isBoolean = original is JsonValue jsonValue && jsonValue.TryGetValue<bool>(out boolean);
-                if (isBoolean)
-                    control = new CheckBox { IsChecked = boolean, MinHeight = 32 };
-                else
-                    control = new NumericUpDown { Value = (decimal)(original?.GetValue<double>() ?? 0), Increment = .1m, FormatString = "0.###", MinHeight = 36 };
-                control.IsEnabled = entry["editable"]?.GetValue<bool>() == true;
-                controls.Add((entry["id"]?.GetValue<string>() ?? "", original, control, isBoolean));
-                var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("320,*"), ColumnSpacing = 12 };
-                grid.Children.Add(new TextBlock { Text = $"{rowName} · {label}", VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap });
-                Grid.SetColumn(control, 1);
-                grid.Children.Add(control);
-                balancePanel.Children.Add(Card(grid));
-            }
-            var save = ActionButton("Save balance changes", Success, async () =>
-            {
-                await GuardAsync(async () =>
+                var value = balanceDraft.GetValueOrDefault(entry.Id);
+                if (!entry.Constraint.TryValidate(value, entry.ValueType, out var validationError))
                 {
-                    if (balance is null) return;
-                    var changes = new JsonArray();
-                    foreach (var item in controls.Where(x => x.Control.IsEnabled))
+                    RenderBalanceContent();
+                    Show($"{entry.Label}: {validationError}", "danger");
+                    return;
+                }
+                if (!JsonNode.DeepEquals(value, entry.Saved))
+                    changes.Add((JsonNode)new JsonObject
                     {
-                        JsonNode? value = item.Boolean
-                            ? JsonValue.Create(((CheckBox)item.Control).IsChecked == true)
-                            : JsonValue.Create((double)(((NumericUpDown)item.Control).Value ?? 0));
-                        if (!JsonNode.DeepEquals(value, item.Original))
-                            changes.Add((JsonNode)new JsonObject { ["id"] = item.Id, ["value"] = value });
-                    }
-                    if (changes.Count == 0) { Show("No balance value changed.", "info"); return; }
-                    balance = (await administration.RequestAsync("balance.write", new JsonObject
-                    {
-                        ["group"] = group, ["expectedRevision"] = balance["revision"]?.DeepClone(), ["changes"] = changes
-                    })).AsObject();
-                    await LoadBalanceAsync(group);
-                    Show("Balance changes saved. Restart to apply them.", "success");
-                });
-            }, FluentIconName.Save);
-            balancePanel.Children.Add(save);
+                        ["id"] = entry.Id,
+                        ["value"] = value?.DeepClone()
+                    });
+            }
+            if (changes.Count == 0)
+            {
+                RenderBalanceContent();
+                Show("No balance value changed.", "info");
+                return;
+            }
+            var response = (await administration.RequestAsync("balance.write", new JsonObject
+            {
+                ["group"] = balanceCatalog.Group,
+                ["expectedRevision"] = balance["revision"]?.DeepClone(),
+                ["changes"] = changes
+            })).AsObject();
+            ApplyBalanceResponse(response, selectedBalanceSlice?.Key);
+            Show("Balance changes saved. Restart to apply them.", "success");
         });
+    }
+
+    private static decimal ToDecimal(JsonNode? value)
+    {
+        return BalanceValueConstraint.TryDecimal(value, out var number) ? number : 0;
+    }
+
+    private static string ConstraintDescription(BalanceEntry entry)
+    {
+        if (entry.Constraint.AllowedValues.Count > 0)
+            return $"\nAllowed values: {string.Join(", ", entry.Constraint.AllowedValues)}";
+        if (entry.Constraint.Minimum is not null || entry.Constraint.Maximum is not null)
+            return $"\nAllowed range: {entry.Constraint.Minimum?.ToString(CultureInfo.InvariantCulture) ?? "−∞"} to {entry.Constraint.Maximum?.ToString(CultureInfo.InvariantCulture) ?? "+∞"}";
+        return entry.AllowedRange.Length > 0 ? $"\nServer constraint: {entry.AllowedRange}" : "";
+    }
+
+    private static string BalanceBreadcrumb(BalanceCatalog catalog, BalanceSlice? slice)
+    {
+        if (slice is null) return catalog.GroupLabel;
+        return catalog.Root == BalanceRoot.Characters
+            ? $"Characters  /  {catalog.GroupLabel}  /  {BalanceCatalogBuilder.CategoryLabel(slice.Category)}  /  {slice.Label}"
+            : $"Game  /  {catalog.GroupLabel}  /  {slice.Label}";
     }
 
     private void ClearAdministrationViews()
@@ -812,6 +1168,18 @@ public sealed partial class MainWindow : Window
         selectionPanel.Children.Clear();
         configurationPanel.Children.Clear();
         balancePanel.Children.Clear();
+        balanceNavigationPanel.Children.Clear();
+        balanceGroups = [];
+        balanceGroupLabels.Clear();
+        balanceDraft.Clear();
+        balanceControls.Clear();
+        balance = null;
+        balanceCatalog = null;
+        selectedBalanceGroup = null;
+        selectedBalanceSlice = null;
+        balanceContentTitle.Text = "Select balancing data";
+        balanceContentSubtitle.Text = "Connect to a server and choose a character or game category.";
+        if (balanceSaveButton is not null) balanceSaveButton.IsVisible = false;
         logs.Text = "";
     }
 
@@ -1017,6 +1385,8 @@ public sealed partial class MainWindow : Window
 
     private sealed record PageDefinition(string Name, string Title, string Subtitle, Control Content,
         bool RequiresConnection);
+
+    private sealed record BalanceEditorBinding(string Id, Control Control);
 
     private enum ServerTransition
     {

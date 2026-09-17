@@ -44,6 +44,19 @@
     <Style Selector="Button.navigation:pointerover /template/ ContentPresenter">
       <Setter Property="Background" Value="{DynamicResource AccentSurfaceBrush}" />
     </Style>
+    <Style Selector="Button.balance-navigation">
+      <Setter Property="MinHeight" Value="34" />
+      <Setter Property="Padding" Value="11,6" />
+      <Setter Property="HorizontalAlignment" Value="Stretch" />
+      <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="Button.balance-navigation:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource AccentSurfaceBrush}" />
+    </Style>
     <Style Selector="Button.action-info:pointerover /template/ ContentPresenter">
       <Setter Property="Background" Value="{DynamicResource InfoHoverBrush}" />
     </Style>
